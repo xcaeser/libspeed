@@ -155,7 +155,7 @@ Requires Zig 0.17 (`mise install`).
 
 ```sh
 zig build test
-zig build -Doptimize=ReleaseFast   # zig-out/{bin,lib,include}
+zig build -Doptimize=ReleaseSmall   # zig-out/{bin,lib,include}
 bun scripts/package.ts             # every platform, into npm/dist
 ```
 

@@ -29,7 +29,7 @@ for (const [platform, zig] of Object.entries(targets)) {
   const out = `npm/dist/${platform}`;
   const prefix = `zig-out/${zig}`;
   await rm(prefix, { recursive: true, force: true });
-  await $`zig build -Dtarget=${zig} -Doptimize=ReleaseFast --prefix ${prefix}`;
+  await $`zig build -Dtarget=${zig} -Doptimize=ReleaseSmall --prefix ${prefix}`;
 
   // `speed upgrade` looks for exactly these names.
   const exe = os === "win32" ? "speed.exe" : "speed";
