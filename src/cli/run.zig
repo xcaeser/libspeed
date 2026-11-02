@@ -98,9 +98,7 @@ fn report(w: *Io.Writer, r: speed.Result, color: bool) !void {
     try w.print("  {s:<10}{s}{s:>10}{s}  {s}{s}{s}\n", .{ "Download", b, try rate(&v, r.download.bps.p50), x, d, try loaded(&s, r.download.latency.p50), x });
     try w.print("  {s:<10}{s}{s:>10}{s}  {s}{s}{s}\n", .{ "Upload", b, try rate(&v, r.upload.bps.p50), x, d, try loaded(&s, r.upload.latency.p50), x });
     try w.print("  {s:<10}{s}{s:>10}{s}  {s}jitter {s}{s}\n", .{ "Latency", b, try ms(&v, r.latency.p50), x, d, try ms(&s, r.jitter), x });
-    try w.print("  {s:<10}{s}{s:>10}{s}", .{ "Loss", b, if (r.loss) |l| try percent(&v, l) else "–", x });
-    if (r.download.retransmits) |rt| try w.print("  {s}{s} retransmitted{s}", .{ d, try percent(&s, rt), x });
-    try w.writeByte('\n');
+    try w.print("  {s:<10}{s}{s:>10}{s}\n", .{ "Loss", b, if (r.loss) |l| try percent(&v, l) else "–", x });
     if (r.colo) |c| try w.print("\n  {s}Cloudflare {s}{s}\n", .{ d, &c, x });
 }
 
@@ -138,10 +136,9 @@ const Json = struct {
     const Load = struct {
         bps: speed.Summary,
         latency_ms: speed.Summary,
-        retransmits: ?f64,
 
         fn of(l: speed.Load) Load {
-            return .{ .bps = l.bps, .latency_ms = l.latency, .retransmits = l.retransmits };
+            return .{ .bps = l.bps, .latency_ms = l.latency };
         }
     };
 

@@ -15,13 +15,12 @@ pub const Result = struct {
     bps: Summary,
     /// TCP connect time to the server while the link is saturated, in ms.
     latency: Summary,
-    /// Fraction of segments the server retransmitted. Download only.
-    retransmits: ?f64,
 };
 
 pub const Options = struct {
     streams: u8,
     duration: Io.Duration,
+    max_bytes: u64,
     down_url: []const u8,
     up_url: []const u8,
     target: Io.net.IpAddress,
@@ -34,12 +33,15 @@ const tick: Io.Duration = .fromMilliseconds(100);
 const window = 5;
 /// The first quarter of the run is TCP slow start and TLS handshakes.
 const ramp_divisor = 4;
-/// Steady-state ticks needed to report a phase the server cut short.
+/// Steady-state ticks needed to report a phase that ends early.
 const min_steady = 10;
+/// Shortest phase that leaves steady-state samples after the ramp.
+pub const min_duration: Io.Duration = .fromMilliseconds(100 * (window + min_steady) * ramp_divisor / (ramp_divisor - 1));
 const ping_interval: Io.Duration = .fromMilliseconds(200);
 
 const Shared = struct {
     io: Io,
+    client: *http.Client,
     direction: Direction,
     uri: std.Uri,
     bytes: std.atomic.Value(u64) = .init(0),
@@ -50,39 +52,36 @@ const Shared = struct {
 };
 
 const Worker = struct {
-    shared: *Shared,
-    client: http.Client,
-    tcp: TcpStats = .{},
-    banked: TcpStats = .{},
-
-    fn run(w: *Worker) Io.Cancelable!void {
-        const io = w.shared.io;
-        var size: u64 = 1 << 20;
-        while (!w.shared.stop.load(.acquire)) {
+    fn run(s: *Shared) Io.Cancelable!void {
+        const io = s.io;
+        var size: u64 = 4 << 20;
+        while (!s.stop.load(.acquire)) {
             const start = Io.Clock.awake.now(io);
-            w.transfer(size) catch |err| {
+            transfer(s, size) catch |err| {
                 switch (err) {
                     error.Canceled => return error.Canceled,
                     // Retrying only extends the server's penalty.
-                    error.RateLimited => return w.shared.rate_limited.store(true, .release),
-                    else => std.log.debug("{t} stream failed: {t}", .{ w.shared.direction, err }),
+                    error.RateLimited => return s.rate_limited.store(true, .release),
+                    else => std.log.debug("{t} stream failed: {t}", .{ s.direction, err }),
                 }
+                // Cancellation surfaces as ReadFailed or WriteFailed, consuming it.
+                if (s.stop.load(.acquire)) return;
                 try io.sleep(.fromMilliseconds(250), .awake);
                 continue;
             };
-            // Size the next request to take about a quarter second.
+            // Size the next request to take about a second, staying under 10 MB:
+            // a few larger requests get an IP throttled for about an hour.
             const ns: u64 = @intCast(@max(1, start.untilNow(io, .awake).toNanoseconds()));
-            size = std.math.clamp(size * std.time.ns_per_s / 4 / ns, 64 << 10, 8 << 20); // Cloudflare throttles an IP for most of an hour once it fetches 10 MB+ too often.
+            size = std.math.clamp(size * std.time.ns_per_s / ns, 1 << 20, 9_999_999);
         }
     }
 
-    fn transfer(w: *Worker, size: u64) !void {
-        const s = w.shared;
+    fn transfer(s: *Shared, size: u64) !void {
         var uri = s.uri;
         var query_buf: [32]u8 = undefined;
         if (s.direction == .download) uri.query = .{ .raw = try std.fmt.bufPrint(&query_buf, "bytes={d}", .{size}) };
 
-        var req = try w.client.request(if (s.direction == .download) .GET else .POST, uri, .{
+        var req = try s.client.request(if (s.direction == .download) .GET else .POST, uri, .{
             .redirect_behavior = .unhandled,
             .headers = .{ .accept_encoding = .omit },
         });
@@ -119,7 +118,6 @@ const Worker = struct {
             },
             else => return error.HttpStatus,
         }
-        if (s.direction == .download) w.recordTcp(response.head);
 
         const body = response.reader(&.{});
         while (!s.stop.load(.acquire)) {
@@ -129,50 +127,6 @@ const Worker = struct {
             };
             if (s.direction == .download) _ = s.bytes.fetchAdd(n, .monotonic);
         }
-    }
-
-    /// Cloudflare reports the server's cumulative TCP counters per connection
-    /// in `server-timing: cfL4;desc="?...&sent=N&retrans=N&cid=X..."`.
-    fn recordTcp(w: *Worker, head: http.Client.Response.Head) void {
-        var it = head.iterateHeaders();
-        while (it.next()) |h| {
-            if (!std.ascii.eqlIgnoreCase(h.name, "server-timing")) continue;
-            const stats = TcpStats.parse(h.value) orelse continue;
-            if (stats.cid != w.tcp.cid) {
-                w.banked.sent += w.tcp.sent;
-                w.banked.retrans += w.tcp.retrans;
-            }
-            w.tcp = stats;
-        }
-    }
-};
-
-const TcpStats = struct {
-    cid: u64 = 0,
-    sent: u64 = 0,
-    retrans: u64 = 0,
-
-    fn parse(value: []const u8) ?TcpStats {
-        const start = std.mem.find(u8, value, "cfL4;desc=\"?") orelse return null;
-        const rest = value[start + "cfL4;desc=\"?".len ..];
-        const params = rest[0 .. std.mem.findScalar(u8, rest, '"') orelse rest.len];
-        var stats: TcpStats = .{};
-        var seen: u2 = 0;
-        var it = std.mem.splitScalar(u8, params, '&');
-        while (it.next()) |kv| {
-            const eq = std.mem.findScalar(u8, kv, '=') orelse continue;
-            const key, const val = .{ kv[0..eq], kv[eq + 1 ..] };
-            if (std.mem.eql(u8, key, "sent")) {
-                stats.sent = std.fmt.parseInt(u64, val, 10) catch return null;
-                seen += 1;
-            } else if (std.mem.eql(u8, key, "retrans")) {
-                stats.retrans = std.fmt.parseInt(u64, val, 10) catch return null;
-                seen += 1;
-            } else if (std.mem.eql(u8, key, "cid")) {
-                stats.cid = std.fmt.parseInt(u64, val, 16) catch return null;
-            }
-        }
-        return if (seen == 2) stats else null;
     }
 };
 
@@ -200,8 +154,7 @@ const Pinger = struct {
 pub fn measure(
     io: Io,
     gpa: Allocator,
-    /// Its CA bundle is shared read-only with the stream clients.
-    primed: *const http.Client,
+    client: *http.Client,
     direction: Direction,
     options: Options,
     context: anytype,
@@ -209,6 +162,7 @@ pub fn measure(
 ) !Result {
     var shared: Shared = .{
         .io = io,
+        .client = client,
         .direction = direction,
         .uri = try .parse(if (direction == .download) options.down_url else options.up_url),
     };
@@ -219,23 +173,11 @@ pub fn measure(
     defer gpa.free(ticks);
     const pings = try gpa.alloc(f64, duration_ns / @as(u64, @intCast(ping_interval.toNanoseconds())) + 1);
     defer gpa.free(pings);
-    const workers = try gpa.alloc(Worker, options.streams);
-    defer gpa.free(workers);
-
-    for (workers) |*w| w.* = .{
-        .shared = &shared,
-        .client = .{ .allocator = gpa, .io = io, .ca_bundle = primed.ca_bundle, .now = primed.now },
-    };
-    defer for (workers) |*w| {
-        // The bundle belongs to `primed`.
-        w.client.ca_bundle = .empty;
-        w.client.deinit();
-    };
     var pinger: Pinger = .{ .shared = &shared, .target = options.target, .samples = pings };
 
     var group: Io.Group = .init;
     defer group.cancel(io);
-    for (workers) |*w| try group.concurrent(io, Worker.run, .{w});
+    for (0..options.streams) |_| try group.concurrent(io, Worker.run, .{&shared});
     try group.concurrent(io, Pinger.run, .{&pinger});
 
     const start = Io.Clock.awake.now(io);
@@ -246,9 +188,10 @@ pub fn measure(
         try (Io.Timeout{ .deadline = .{ .raw = at, .clock = .awake } }).sleep(io);
         ticks[len] = shared.bytes.load(.monotonic);
         len += 1;
-        const from = len -| window - 1;
+        const from = len -| (window + 1);
         onTick(context, bps(ticks[from..len], tick_ns), @as(f32, @floatFromInt(len - 1)) / @as(f32, @floatFromInt(ticks.len - 1)));
         if (len * 2 >= ticks.len and settled(ticks[0..len])) break;
+        if (ticks[len - 1] >= options.max_bytes and steady(len)) break;
         // A throttled stream would make the rest of the phase look slower than
         // the link is; ticks before this one were all streams flowing.
         if (shared.rate_limited.load(.acquire)) {
@@ -259,8 +202,7 @@ pub fn measure(
     shared.stop.store(true, .release);
     group.cancel(io);
 
-    const first = @max(window, len / ramp_divisor);
-    if (shared.rate_limited.load(.acquire) and len < first + min_steady) {
+    if (shared.rate_limited.load(.acquire) and !steady(len)) {
         const seconds = shared.retry_after.load(.monotonic);
         if (seconds != 0) options.retry_after.* = .fromSeconds(seconds);
         return error.RateLimited;
@@ -269,20 +211,22 @@ pub fn measure(
 
     var samples: std.ArrayList(f64) = .empty;
     defer samples.deinit(gpa);
+    const first = rampTicks(len);
     for (first..len) |i| try samples.append(gpa, bps(ticks[i - window ..][0 .. window + 1], tick_ns));
-
-    var sent: u64 = 0;
-    var retrans: u64 = 0;
-    for (workers) |w| {
-        sent += w.banked.sent + w.tcp.sent;
-        retrans += w.banked.retrans + w.tcp.retrans;
-    }
 
     return .{
         .bps = .of(samples.items),
         .latency = .of(pings[0..pinger.len]),
-        .retransmits = if (sent == 0) null else @as(f64, @floatFromInt(retrans)) / @as(f64, @floatFromInt(sent)),
     };
+}
+
+fn rampTicks(len: usize) usize {
+    return @max(window, len / ramp_divisor);
+}
+
+/// Enough samples after the ramp to report a phase that ends early.
+fn steady(len: usize) bool {
+    return len >= rampTicks(len) + min_steady;
 }
 
 /// The last second's throughput is within 5% of the second before it, so
@@ -312,21 +256,15 @@ fn bps(counts: []const u64, tick_ns: u64) f64 {
     return bytes * 8 / seconds;
 }
 
-test "TcpStats.parse" {
-    const v = "cfL4;desc=\"?proto=TCP&rtt=12795&sent=38976&recv=259&lost=0&retrans=12&cid=23fec116483e7e8f&x=0\"";
-    try std.testing.expectEqual(TcpStats{ .cid = 0x23fec116483e7e8f, .sent = 38976, .retrans = 12 }, TcpStats.parse(v).?);
-    try std.testing.expectEqual(null, TcpStats.parse("cfSpeedEdge;dur=3"));
-}
-
 test settled {
-    var steady: [21]u64 = undefined;
-    for (&steady, 0..) |*c, i| c.* = i * 1000;
-    try std.testing.expect(settled(&steady));
+    var flat: [21]u64 = undefined;
+    for (&flat, 0..) |*c, i| c.* = i * 1000;
+    try std.testing.expect(settled(&flat));
 
     var ramping: [21]u64 = undefined;
     for (&ramping, 0..) |*c, i| c.* = i * i * 1000;
     try std.testing.expect(!settled(&ramping));
-    try std.testing.expect(!settled(steady[0..20]));
+    try std.testing.expect(!settled(flat[0..20]));
 }
 
 test bps {

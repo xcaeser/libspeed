@@ -13,8 +13,6 @@ export interface Load {
   bps: Summary;
   /** Round trip while the link is saturated. */
   latencyMs: Summary;
-  /** Fraction of TCP segments the server resent; download only. */
-  retransmits: number | null;
 }
 
 export interface Result {
@@ -40,13 +38,14 @@ export interface Progress {
 export interface Options {
   host?: string;
   streams?: number;
+  /** At least 2000. */
   durationMs?: number;
   pings?: number;
   onProgress?: (progress: Progress) => void;
 }
 
 export class SpeedError extends Error {
-  constructor(readonly code: "rate_limited" | "dns" | "network" | "out_of_memory") {
+  constructor(readonly code: "rate_limited" | "dns" | "network" | "out_of_memory" | "invalid_options") {
     super(`speed test failed: ${code}`);
   }
 }

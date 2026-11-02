@@ -6,8 +6,9 @@ import { cp, mkdir, rm } from "node:fs/promises";
 const targets = {
   "darwin-arm64": "aarch64-macos",
   "darwin-x64": "x86_64-macos",
-  "linux-arm64": "aarch64-linux-musl",
-  "linux-x64": "x86_64-linux-musl",
+  // glibc so libspeed.so loads into ordinary hosts; the CLI links no libc and stays static.
+  "linux-arm64": "aarch64-linux-gnu.2.28",
+  "linux-x64": "x86_64-linux-gnu.2.28",
   "win32-arm64": "aarch64-windows",
   "win32-x64": "x86_64-windows",
 };

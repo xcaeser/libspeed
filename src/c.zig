@@ -14,7 +14,6 @@ const Summary = extern struct { p10: f64, p50: f64, p90: f64 };
 const Load = extern struct {
     bps: Summary,
     latency_ms: Summary,
-    retransmits: f64,
 };
 
 const Result = extern struct {
@@ -30,10 +29,10 @@ const Result = extern struct {
 comptime {
     // sdk/ts decodes these by offset.
     std.debug.assert(@sizeOf(Options) == 24);
-    std.debug.assert(@sizeOf(Result) == 168);
+    std.debug.assert(@sizeOf(Result) == 152);
 }
 
-const Status = enum(c_int) { ok, rate_limited, dns, network, out_of_memory };
+const Status = enum(c_int) { ok, rate_limited, dns, network, out_of_memory, invalid_options };
 
 const ProgressFn = *const fn (context: ?*anyopaque, phase: c_int, value: f64, progress: f32) callconv(.c) void;
 
@@ -47,10 +46,21 @@ const Forward = struct {
     }
 };
 
+var threaded: std.Io.Threaded = undefined;
+var threaded_state: std.atomic.Value(enum(u8) { none, starting, ready }) = .init(.none);
+
+/// Threaded installs process-wide signal handlers that cancellation relies on,
+/// so overlapping runs share one instance, which lives until the process exits.
+fn io() std.Io {
+    if (threaded_state.cmpxchgStrong(.none, .starting, .acquire, .acquire) == null) {
+        threaded = .init(std.heap.smp_allocator, .{});
+        threaded_state.store(.ready, .release);
+    } else while (threaded_state.load(.acquire) != .ready) std.atomic.spinLoopHint();
+    return threaded.io();
+}
+
 export fn speed_run(options: ?*const Options, callback: ?ProgressFn, context: ?*anyopaque, out: *Result) Status {
     const gpa = std.heap.smp_allocator;
-    var threaded: std.Io.Threaded = .init(gpa, .{});
-    defer threaded.deinit();
 
     var o: speed.Options = .{};
     if (options) |c| {
@@ -65,10 +75,11 @@ export fn speed_run(options: ?*const Options, callback: ?ProgressFn, context: ?*
         o.listener = .{ .context = &forward, .onEvent = Forward.onEvent };
     }
 
-    const r = speed.run(threaded.io(), gpa, o) catch |err| return switch (err) {
+    const r = speed.run(io(), gpa, o) catch |err| return switch (err) {
         error.RateLimited => .rate_limited,
         error.OutOfMemory => .out_of_memory,
         error.UnknownHostName, error.NameServerFailure, error.NoAddressReturned => .dns,
+        error.DurationTooShort => .invalid_options,
         else => .network,
     };
     out.* = .{
@@ -91,6 +102,5 @@ fn load(l: speed.Load) Load {
     return .{
         .bps = summary(l.bps),
         .latency_ms = summary(l.latency),
-        .retransmits = l.retransmits orelse std.math.nan(f64),
     };
 }

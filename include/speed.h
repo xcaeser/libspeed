@@ -20,6 +20,8 @@ typedef enum {
     SPEED_DNS,
     SPEED_NETWORK,
     SPEED_OUT_OF_MEMORY,
+    /* duration_ms below 2000. */
+    SPEED_INVALID_OPTIONS,
 } speed_status;
 
 /* Zero fields take their defaults. */
@@ -37,7 +39,6 @@ typedef struct {
 typedef struct {
     speed_summary bps;
     speed_summary latency_ms; /* round trip while saturated */
-    double retransmits;       /* fraction of segments resent; NaN if unknown */
 } speed_load;
 
 typedef struct {

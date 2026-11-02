@@ -12,7 +12,7 @@ const lib = dlopen(join(dirname(pkg), files[process.platform]!), {
 });
 
 const phases: Phase[] = ["latency", "download", "upload"];
-const errors = [null, "rate_limited", "dns", "network", "out_of_memory"] as const;
+const errors = [null, "rate_limited", "dns", "network", "out_of_memory", "invalid_options"] as const;
 
 self.onmessage = ({ data }: MessageEvent<Omit<Options, "onProgress">>) => {
   const options = new DataView(new ArrayBuffer(24));
@@ -27,7 +27,7 @@ self.onmessage = ({ data }: MessageEvent<Omit<Options, "onProgress">>) => {
       postMessage({ progress: { phase: phases[phase], value, progress } }),
     { args: [FFIType.ptr, FFIType.i32, FFIType.f64, FFIType.f32], returns: FFIType.void },
   );
-  const out = new Float64Array(21);
+  const out = new Float64Array(19);
   const status = lib.symbols.speed_run(options, progress.ptr, null, out);
   progress.close();
 
@@ -39,7 +39,7 @@ function decode(f: Float64Array): Result {
   const colo = new TextDecoder().decode(new Uint8Array(f.buffer, 0, 3));
   const summary = (i: number): Summary => ({ p10: f[i]!, p50: f[i + 1]!, p90: f[i + 2]! });
   const known = (x: number) => (Number.isNaN(x) ? null : x);
-  const load = (i: number): Load => ({ bps: summary(i), latencyMs: summary(i + 3), retransmits: known(f[i + 6]!) });
+  const load = (i: number): Load => ({ bps: summary(i), latencyMs: summary(i + 3) });
   return {
     server: colo.startsWith("\0") ? null : colo,
     dnsMs: f[1]!,
@@ -47,6 +47,6 @@ function decode(f: Float64Array): Result {
     jitterMs: f[5]!,
     loss: known(f[6]!),
     download: load(7),
-    upload: load(14),
+    upload: load(13),
   };
 }

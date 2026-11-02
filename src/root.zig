@@ -1,6 +1,6 @@
 //! Measures internet connection quality against Cloudflare's speed test edge:
 //! latency, jitter, packet loss, download and upload throughput, and how
-//! latency and retransmissions degrade while the link is saturated.
+//! latency degrades while the link is saturated.
 const std = @import("std");
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
@@ -11,14 +11,19 @@ const probe = @import("probe.zig");
 
 pub const Summary = @import("Summary.zig");
 pub const Load = load.Result;
+pub const min_duration = load.min_duration;
 
 pub const Options = struct {
     /// Must serve Cloudflare's `/__down?bytes=N` and `/__up` endpoints.
     host: []const u8 = "speed.cloudflare.com",
     /// Parallel connections per direction.
     streams: u8 = 6,
-    /// Length of each of the download and upload phases.
+    /// Longest each of the download and upload phases may run. At least
+    /// `min_duration`.
     duration: Io.Duration = .fromSeconds(8),
+    /// Data each phase may move. Cloudflare throttles an IP for most of an
+    /// hour after about 1 GB in a few seconds; its own test moves ~250 MB.
+    max_bytes: u64 = 400_000_000,
     /// Idle latency samples.
     pings: u16 = 20,
     listener: ?Listener = null,
@@ -69,6 +74,8 @@ pub const Result = struct {
 pub fn run(io: Io, gpa: Allocator, options: Options) !Result {
     var ignored: Diagnostics = .{};
     const diagnostics = options.diagnostics orelse &ignored;
+    diagnostics.* = .{};
+    if (options.duration.toNanoseconds() < min_duration.toNanoseconds()) return error.DurationTooShort;
     const down_url = try std.fmt.allocPrint(gpa, "https://{s}/__down", .{options.host});
     defer gpa.free(down_url);
     const up_url = try std.fmt.allocPrint(gpa, "https://{s}/__up", .{options.host});
@@ -104,6 +111,7 @@ pub fn run(io: Io, gpa: Allocator, options: Options) !Result {
     const load_options: load.Options = .{
         .streams = options.streams,
         .duration = options.duration,
+        .max_bytes = options.max_bytes,
         .down_url = down_url,
         .up_url = up_url,
         .target = resolved.address,
@@ -120,7 +128,7 @@ pub fn run(io: Io, gpa: Allocator, options: Options) !Result {
     };
 }
 
-fn measure(io: Io, gpa: Allocator, client: *const std.http.Client, direction: load.Direction, options: load.Options, listener: ?Listener) !Load {
+fn measure(io: Io, gpa: Allocator, client: *std.http.Client, direction: load.Direction, options: load.Options, listener: ?Listener) !Load {
     const Tick = struct {
         listener: ?Listener,
         phase: Phase,
@@ -136,8 +144,7 @@ fn measure(io: Io, gpa: Allocator, client: *const std.http.Client, direction: lo
     return load.measure(io, gpa, client, direction, options, Tick{ .listener = listener, .phase = phase }, Tick.onTick);
 }
 
-/// Returns the edge's location code. Also loads the CA bundle the stream
-/// clients share.
+/// Returns the edge's location code.
 fn edge(client: *std.http.Client, down_url: []const u8, diagnostics: *Diagnostics) !?[3]u8 {
     var uri: std.Uri = try .parse(down_url);
     uri.query = .{ .raw = "bytes=0" };

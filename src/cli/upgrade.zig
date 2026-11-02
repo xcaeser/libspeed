@@ -79,15 +79,25 @@ fn exec(ctx: zli.CommandContext) !void {
     try w.print("Downloading speed {f}…\n", .{latest});
     try w.flush();
     body.clearRetainingCapacity();
-    const download = try client.fetch(.{
-        .location = .{ .url = found.browser_download_url },
-        .response_writer = &body.writer,
-    });
-    if (download.status != .ok) return error.DownloadFailed;
+    try download(&client, found.browser_download_url, &body.writer);
     try verify(body.written(), digest);
 
     try replace(io, gpa, self_path, body.written());
     try w.print("Upgraded speed {f} → {f}\n", .{ current, latest });
+}
+
+/// Like `client.fetch`, which asserts on a dropped connection mid-body.
+fn download(client: *std.http.Client, url: []const u8, out: *Io.Writer) !void {
+    var req = try client.request(.GET, try .parse(url), .{});
+    defer req.deinit();
+    try req.sendBodiless();
+    var redirect: [8 << 10]u8 = undefined;
+    var response = try req.receiveHead(&redirect);
+    if (response.head.status != .ok) return error.DownloadFailed;
+    _ = response.reader(&.{}).streamRemaining(out) catch |err| switch (err) {
+        error.ReadFailed => return response.bodyErr() orelse req.connection.?.getReadError().?,
+        error.WriteFailed => return error.OutOfMemory,
+    };
 }
 
 fn verify(bytes: []const u8, digest: []const u8) !void {
@@ -113,13 +123,14 @@ fn replace(io: Io, gpa: std.mem.Allocator, self_path: []const u8, bytes: []const
     });
     errdefer cwd.deleteFile(io, staged) catch {};
 
+    if (builtin.os.tag != .windows) return cwd.rename(staged, cwd, self_path, io);
+
     // Windows cannot overwrite a running executable, but can rename it.
-    if (builtin.os.tag == .windows) {
-        const old = try std.fmt.allocPrint(gpa, "{s}.old", .{self_path});
-        defer gpa.free(old);
-        cwd.deleteFile(io, old) catch {};
-        try cwd.rename(self_path, cwd, old, io);
-    }
+    const old = try std.fmt.allocPrint(gpa, "{s}.old", .{self_path});
+    defer gpa.free(old);
+    cwd.deleteFile(io, old) catch {};
+    try cwd.rename(self_path, cwd, old, io);
+    errdefer cwd.rename(old, cwd, self_path, io) catch {};
     try cwd.rename(staged, cwd, self_path, io);
 }
 

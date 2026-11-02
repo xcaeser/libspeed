@@ -10,6 +10,8 @@ permissions:
 jobs:
   release:
     runs-on: macos-latest
+    env:
+      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
     steps:
       - uses: actions/checkout@v5
       - uses: jdx/mise-action@v3
@@ -24,8 +26,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
       - name: Publish to npm
         if: env.NODE_AUTH_TOKEN != ''
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           echo "//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}" > ~/.npmrc
           for dir in npm/dist/*/; do

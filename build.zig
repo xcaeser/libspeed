@@ -45,6 +45,10 @@ pub fn build(b: *std.Build) void {
                 .target = target,
                 .optimize = optimize,
                 .strip = strip,
+                // Host threads need the host's libc: without it, std sets up
+                // thread-local storage from state only an executable's start
+                // code initializes.
+                .link_libc = true,
             }),
         });
         lib.installHeader(b.path("include/speed.h"), "speed.h");

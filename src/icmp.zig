@@ -9,12 +9,14 @@ const header_len = 8;
 const token_len = 8;
 
 pub const Options = struct {
-    count: u16 = 50,
+    count: u8 = 50,
     interval: Io.Duration = .fromMilliseconds(20),
     timeout: Io.Duration = .fromMilliseconds(1000),
 };
 
-/// Returns the fraction of echo requests that got no reply in [0, 1].
+/// Returns the fraction of echo requests that got no reply in [0, 1], after
+/// `count * interval + timeout`. Fails when no reply arrives at all, since a
+/// firewall dropping ICMP says nothing about the link.
 pub fn loss(io: Io, target: net.IpAddress, options: Options) !f64 {
     const v6 = target == .ip6;
     const local: net.IpAddress = if (v6) .{ .ip6 = .unspecified(0) } else .{ .ip4 = .unspecified(0) };
@@ -24,30 +26,35 @@ pub fn loss(io: Io, target: net.IpAddress, options: Options) !f64 {
     var token: [token_len]u8 = undefined;
     io.random(&token);
 
-    var received: u16 = 0;
+    var replied: std.StaticBitSet(256) = .empty;
+    const start = Io.Clock.awake.now(io);
     for (0..options.count) |i| {
-        const seq: u16 = @intCast(i);
+        const seq: u8 = @intCast(i);
         const request = echoRequest(v6, seq, token);
         try socket.send(io, &target, &request);
-        if (try awaitReply(io, socket, v6, seq, token, options.timeout)) received += 1;
-        try io.sleep(options.interval, .awake);
+        const next = start.addDuration(.fromNanoseconds(options.interval.toNanoseconds() * @as(i96, @intCast(i + 1))));
+        const until = if (i + 1 == options.count) next.addDuration(options.timeout) else next;
+        try collect(io, socket, v6, token, until, &replied);
     }
+
+    const received = replied.count();
+    if (received == 0) return error.NoReplies;
     return 1 - @as(f64, @floatFromInt(received)) / @as(f64, @floatFromInt(options.count));
 }
 
-fn awaitReply(io: Io, socket: net.Socket, v6: bool, seq: u16, token: [token_len]u8, timeout: Io.Duration) !bool {
-    const deadline: Io.Timeout = (Io.Timeout{ .duration = .{ .raw = timeout, .clock = .awake } }).toDeadline(io);
+/// Records replies until `until`.
+fn collect(io: Io, socket: net.Socket, v6: bool, token: [token_len]u8, until: Io.Timestamp, replied: *std.StaticBitSet(256)) !void {
     var buf: [1500]u8 = undefined;
     while (true) {
-        const message = socket.receiveTimeout(io, &buf, deadline) catch |err| switch (err) {
-            error.Timeout => return false,
+        const message = socket.receiveTimeout(io, &buf, .{ .deadline = .{ .raw = until, .clock = .awake } }) catch |err| switch (err) {
+            error.Timeout => return,
             else => |e| return e,
         };
-        if (isReply(message.data, v6, seq, token)) return true;
+        if (replySeq(message.data, v6, token)) |seq| replied.set(seq);
     }
 }
 
-fn echoRequest(v6: bool, seq: u16, token: [token_len]u8) [header_len + token_len]u8 {
+fn echoRequest(v6: bool, seq: u8, token: [token_len]u8) [header_len + token_len]u8 {
     var p: [header_len + token_len]u8 = undefined;
     p[0] = if (v6) 128 else 8;
     p[1] = 0;
@@ -61,18 +68,19 @@ fn echoRequest(v6: bool, seq: u16, token: [token_len]u8) [header_len + token_len
     return p;
 }
 
-fn isReply(data: []const u8, v6: bool, seq: u16, token: [token_len]u8) bool {
+/// Returns the sequence number of our echo reply, or null for other traffic.
+fn replySeq(data: []const u8, v6: bool, token: [token_len]u8) ?u8 {
     var icmp = data;
     // macOS delivers IPv4 replies with their IP header attached.
     if (!v6 and icmp.len > 0 and icmp[0] >> 4 == 4) {
         const ihl = @as(usize, icmp[0] & 0x0f) * 4;
-        if (icmp.len < ihl) return false;
+        if (icmp.len < ihl) return null;
         icmp = icmp[ihl..];
     }
-    if (icmp.len < header_len + token_len) return false;
-    return icmp[0] == @as(u8, if (v6) 129 else 0) and
-        std.mem.readInt(u16, icmp[6..8], .big) == seq and
-        std.mem.eql(u8, icmp[header_len..][0..token_len], &token);
+    if (icmp.len < header_len + token_len) return null;
+    if (icmp[0] != @as(u8, if (v6) 129 else 0)) return null;
+    if (!std.mem.eql(u8, icmp[header_len..][0..token_len], &token)) return null;
+    return std.math.cast(u8, std.mem.readInt(u16, icmp[6..8], .big));
 }
 
 fn checksum(bytes: []const u8) u16 {
@@ -93,13 +101,14 @@ test "reply matching" {
     const token = "abcdefgh".*;
     var reply = echoRequest(false, 3, token);
     reply[0] = 0;
-    try std.testing.expect(isReply(&reply, false, 3, token));
-    try std.testing.expect(!isReply(&reply, false, 4, token));
-    try std.testing.expect(!isReply(&reply, false, 3, "zzzzzzzz".*));
+    try std.testing.expectEqual(3, replySeq(&reply, false, token));
+    try std.testing.expectEqual(null, replySeq(&reply, false, "zzzzzzzz".*));
+    var request = echoRequest(false, 3, token);
+    try std.testing.expectEqual(null, replySeq(&request, false, token));
 
     // Same reply behind a 20-byte IPv4 header, as macOS delivers it.
     var framed: [20 + reply.len]u8 = @splat(0);
     framed[0] = 0x45;
     framed[20..].* = reply;
-    try std.testing.expect(isReply(&framed, false, 3, token));
+    try std.testing.expectEqual(3, replySeq(&framed, false, token));
 }
