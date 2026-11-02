@@ -1,6 +1,6 @@
 {
   "name": "@xcaeser/speed",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Measure your internet connection: speed, latency, jitter and packet loss.",
   "license": "MIT",
   "repository": "github:xcaeser/libspeed",
@@ -17,11 +17,11 @@
     "worker.ts"
   ],
   "optionalDependencies": {
-    "@xcaeser/speed-darwin-arm64": "0.1.0",
-    "@xcaeser/speed-darwin-x64": "0.1.0",
-    "@xcaeser/speed-linux-arm64": "0.1.0",
-    "@xcaeser/speed-linux-x64": "0.1.0",
-    "@xcaeser/speed-win32-arm64": "0.1.0",
-    "@xcaeser/speed-win32-x64": "0.1.0"
+    "@xcaeser/speed-darwin-arm64": "1.0.0",
+    "@xcaeser/speed-darwin-x64": "1.0.0",
+    "@xcaeser/speed-linux-arm64": "1.0.0",
+    "@xcaeser/speed-linux-x64": "1.0.0",
+    "@xcaeser/speed-win32-arm64": "1.0.0",
+    "@xcaeser/speed-win32-x64": "1.0.0"
   }
 }
