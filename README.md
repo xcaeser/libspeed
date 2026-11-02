@@ -21,9 +21,20 @@ bunx @xcaeser/speed run        # or: npx @xcaeser/speed run
 npm install -g @xcaeser/speed  # then: speed run
 ```
 
-Or download a binary for your platform from
-[Releases](https://github.com/xcaeser/libspeed/releases) and keep it current
-with `speed upgrade`.
+Or download from [Releases](https://github.com/xcaeser/libspeed/releases):
+
+| Platform | Download |
+| --- | --- |
+| macOS | `speed-<version>.dmg` (Apple Silicon and Intel) |
+| Debian, Ubuntu | `speed_<version>_amd64.deb`, `_arm64.deb` |
+| Fedora, RHEL, openSUSE | `speed-<version>-1.x86_64.rpm`, `.aarch64.rpm` |
+| Any Linux | `speed-linux-x64`, `speed-linux-arm64`, static binaries |
+| Windows | `speed-win32-x64.exe`, `speed-win32-arm64.exe` |
+
+`speed upgrade` keeps a downloaded binary current.
+
+The macOS binary is not notarized yet. If macOS refuses to open it, run
+`xattr -d com.apple.quarantine speed` once.
 
 ## Commands
 
@@ -88,7 +99,7 @@ how long to wait.
 ### Zig
 
 ```sh
-zig fetch --save git+https://github.com/xcaeser/libspeed
+zig fetch --save https://github.com/xcaeser/libspeed/archive/v<version>.tar.gz
 ```
 
 ```zig
@@ -106,9 +117,10 @@ std.debug.print("{d:.0} Mbps down\n", .{result.download.bps.p50 / 1e6});
 
 ### C, Go, Swift and others
 
-Each release has `libspeed-<platform>.tar.gz` with `include/speed.h`,
-`libspeed.a` and the shared library. See [`speed.h`](include/speed.h) for the
-API: one blocking call, `speed_run`, with an optional progress callback.
+Each release has `speed.h` and `libspeed-<platform>.a` for static linking, and
+`libspeed-<platform>.tar.gz` with the header, static and shared libraries. See
+[`speed.h`](include/speed.h) for the API: one blocking call, `speed_run`, with
+an optional progress callback.
 
 ```c
 speed_result r;

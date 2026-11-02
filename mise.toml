@@ -1,3 +1,4 @@
 [tools]
 zig = "0.17.0"
 bun = "latest"
+nfpm = "2.48.0"

@@ -16,7 +16,7 @@ jobs:
       - uses: actions/checkout@v5
       - uses: jdx/mise-action@v3
         with:
-          install_args: zig@0.17.0 bun
+          install_args: zig@0.17.0 bun nfpm@2.48.0
       - run: zig build test
       - run: bun scripts/package.ts
       - name: Check the tag matches build.zig.zon
