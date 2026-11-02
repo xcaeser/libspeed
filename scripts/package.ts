@@ -37,7 +37,7 @@ for (const [platform, zig] of Object.entries(targets)) {
     ? [`${prefix}/bin/speed.exe`, `${prefix}/bin/speed.dll`]
     : [`${prefix}/bin/speed`, `${prefix}/lib/libspeed.${os === "darwin" ? "dylib" : "so"}`];
   await mkdir(out, { recursive: true });
-  for (const file of files) await cp(file, `${out}/${file.split("/").pop()}`);
+  for (const file of [...files, "LICENSE"]) await cp(file, `${out}/${file.split("/").pop()}`);
 
   await Bun.write(`${out}/package.json`, JSON.stringify({
     name,
@@ -52,3 +52,5 @@ for (const [platform, zig] of Object.entries(targets)) {
   console.log(`${name}@${version}`);
 }
 await Bun.write("npm/package.json", JSON.stringify(main, null, 2) + "\n");
+// npm only packs these from the package's own directory.
+for (const file of ["LICENSE", "README.md"]) await cp(file, `npm/${file}`);
