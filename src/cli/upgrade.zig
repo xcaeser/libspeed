@@ -64,7 +64,8 @@ fn exec(ctx: zli.CommandContext) !void {
         else => return error.GitHubUnavailable,
     }
 
-    const parsed = try std.json.parseFromSlice(Release, gpa, body.written(), .{ .ignore_unknown_fields = true });
+    // alloc_always: `body` is reused for the download, so strings must not borrow from it.
+    const parsed = try std.json.parseFromSlice(Release, gpa, body.written(), .{ .ignore_unknown_fields = true, .allocate = .alloc_always });
     defer parsed.deinit();
     const release = parsed.value;
     const latest = try std.SemanticVersion.parse(std.mem.trimStart(u8, release.tag_name, "v"));
