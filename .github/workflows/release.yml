@@ -12,7 +12,19 @@ permissions:
 concurrency: release
 
 jobs:
+  # Windows binaries are cross-compiled on Linux; this runs them for real.
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: jdx/mise-action@v3
+        with:
+          install_args: zig@0.17.0
+      - run: zig build test
+      - run: zig build run -- run --json
+
   release:
+    needs: windows
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ github.token }}
