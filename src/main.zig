@@ -8,10 +8,12 @@ const upgrade = @import("cli/upgrade.zig");
 pub fn main(init: std.process.Init) !void {
     const io = init.io;
 
+    // Streaming, not positional: a redirected stdout must append where the
+    // shell left it, not overwrite from offset 0.
     var wbuf: [4096]u8 = undefined;
-    var stdout = Io.File.Writer.init(.stdout(), io, &wbuf);
+    var stdout = Io.File.stdout().writerStreaming(io, &wbuf);
     var rbuf: [64]u8 = undefined;
-    var stdin = Io.File.Reader.init(.stdin(), io, &rbuf);
+    var stdin = Io.File.stdin().readerStreaming(io, &rbuf);
 
     const options: zli.InitOptions = .{
         .allocator = init.gpa,
