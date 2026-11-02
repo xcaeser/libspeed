@@ -38,7 +38,9 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = mod })).step);
 
-    // Lazy, so packages that only import the `speed` module never fetch zli.
+    // The CLI builds only at the top level, so packages importing the `speed`
+    // module never fetch its lazy zli dependency.
+    if (b.dep_prefix.len != 0) return;
     const zli = b.lazyDependency("zli", .{ .target = target, .optimize = optimize }) orelse return;
     const build_options = b.addOptions();
     build_options.addOption(std.SemanticVersion, "version", std.SemanticVersion.parse(@import("build.zig.zon").version) catch unreachable);
