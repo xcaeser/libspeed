@@ -163,7 +163,8 @@ test "reply matching" {
 test "echoes over loopback" {
     const io = std.testing.io;
     for ([_]net.IpAddress{ .{ .ip4 = .loopback(0) }, .{ .ip6 = .loopback(0) } }) |target| {
-        var echo: Echo = try .open(io, target);
+        // Linux allows unprivileged ICMP only per `net.ipv4.ping_group_range`.
+        var echo: Echo = Echo.open(io, target) catch |err| return if (builtin.os.tag == .linux) error.SkipZigTest else err;
         defer echo.close(io);
         _ = try echo.ms(io);
         try std.testing.expectEqual(0, try loss(io, target, .{ .count = 5 }));
