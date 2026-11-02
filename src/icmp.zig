@@ -1,11 +1,14 @@
 //! Packet loss over unprivileged ICMP echo (SOCK_DGRAM + IPPROTO_ICMP).
 //! Works without root on macOS, and on Linux when `net.ipv4.ping_group_range`
-//! includes the user. Elsewhere `loss` fails and the caller reports it as unknown.
+//! includes the user. Windows goes through the IP Helper API instead.
+//! Elsewhere `loss` fails and the caller reports it as unknown.
 const std = @import("std");
+const builtin = @import("builtin");
 const Io = std.Io;
 const net = Io.net;
 
 const probe = @import("probe.zig");
+const windows = @import("icmp_windows.zig");
 
 const header_len = 8;
 const token_len = 8;
@@ -20,6 +23,7 @@ pub const Options = struct {
 /// `count * interval + timeout`. Fails when no reply arrives at all, since a
 /// firewall dropping ICMP says nothing about the link.
 pub fn loss(io: Io, target: net.IpAddress, options: Options) !f64 {
+    if (builtin.os.tag == .windows) return windows.loss(io, target, options);
     const v6 = target == .ip6;
     const socket = try bind(io, v6);
     defer socket.close(io);
@@ -44,26 +48,28 @@ pub fn loss(io: Io, target: net.IpAddress, options: Options) !f64 {
 }
 
 /// Times echoes to one host, one at a time.
-pub const Echo = struct {
+pub const Echo = if (builtin.os.tag == .windows) windows.Echo else SocketEcho;
+
+const SocketEcho = struct {
     socket: net.Socket,
     target: net.IpAddress,
     token: [token_len]u8,
     seq: u8 = 0,
     timeout: Io.Duration = .fromMilliseconds(1000),
 
-    pub fn open(io: Io, target: net.IpAddress) !Echo {
+    pub fn open(io: Io, target: net.IpAddress) !SocketEcho {
         var token: [token_len]u8 = undefined;
         io.random(&token);
         return .{ .socket = try bind(io, target == .ip6), .target = target, .token = token };
     }
 
-    pub fn close(e: *Echo, io: Io) void {
+    pub fn close(e: *SocketEcho, io: Io) void {
         e.socket.close(io);
     }
 
     /// Round trip of one echo in ms, or error.Timeout when no reply arrives
     /// in time. Late replies to earlier echoes are ignored.
-    pub fn ms(e: *Echo, io: Io) !f64 {
+    pub fn ms(e: *SocketEcho, io: Io) !f64 {
         const v6 = e.target == .ip6;
         e.seq +%= 1;
         const request = echoRequest(v6, e.seq, e.token);
@@ -152,4 +158,14 @@ test "reply matching" {
     framed[0] = 0x45;
     framed[20..].* = reply;
     try std.testing.expectEqual(3, replySeq(&framed, false, token));
+}
+
+test "echoes over loopback" {
+    const io = std.testing.io;
+    for ([_]net.IpAddress{ .{ .ip4 = .loopback(0) }, .{ .ip6 = .loopback(0) } }) |target| {
+        var echo: Echo = try .open(io, target);
+        defer echo.close(io);
+        _ = try echo.ms(io);
+        try std.testing.expectEqual(0, try loss(io, target, .{ .count = 5 }));
+    }
 }

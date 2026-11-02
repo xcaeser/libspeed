@@ -12,7 +12,7 @@ pub const Gateway = struct {
 };
 
 /// Returns null when there is no IPv4 default route or the routing table
-/// can't be read, as on Windows.
+/// can't be read.
 // ponytail: IPv4 only; an IPv6-only network has no verdict. Add the v6 default
 // route (link-local, needs a scope id) if such networks show up.
 pub fn find(io: Io, gpa: Allocator) !?Gateway {
@@ -25,6 +25,7 @@ pub fn find(io: Io, gpa: Allocator) !?Gateway {
             error.Canceled => |e| e,
             else => null,
         },
+        .windows => windows.find(),
         else => null,
     };
 }
@@ -165,6 +166,85 @@ const linux = struct {
     }
 };
 
+const windows = struct {
+    const AF_INET = 2;
+    const IF_TYPE_IEEE80211 = 71;
+
+    /// SOCKADDR_INET, read as its IPv4 member.
+    const Sockaddr = extern struct {
+        family: u16,
+        port: u16 = 0,
+        addr: [4]u8,
+        unused: [5]u32 = @splat(0),
+    };
+
+    /// MIB_IPFORWARD_ROW2, up to the fields read here.
+    const Row = extern struct {
+        luid: u64,
+        index: u32,
+        destination: Sockaddr,
+        prefix_length: u8,
+        next_hop: Sockaddr,
+        unused: [8]u32,
+    };
+
+    comptime {
+        std.debug.assert(@sizeOf(Row) == 104);
+        std.debug.assert(@offsetOf(Row, "next_hop") == 44);
+    }
+
+    extern "iphlpapi" fn GetBestRoute2(
+        luid: ?*const u64,
+        index: u32,
+        source: ?*const Sockaddr,
+        destination: *const Sockaddr,
+        sort_options: u32,
+        route: *Row,
+        best_source: *Sockaddr,
+    ) callconv(.winapi) u32;
+
+    fn find() ?Gateway {
+        // Any public address takes the default route.
+        const destination: Sockaddr = .{ .family = AF_INET, .addr = .{ 1, 1, 1, 1 } };
+        var route: Row = undefined;
+        var source: Sockaddr = undefined;
+        if (GetBestRoute2(null, 0, null, &destination, 0, &route, &source) != 0) return null;
+        return fromRow(route);
+    }
+
+    fn fromRow(route: Row) ?Gateway {
+        // A VPN's split default (0.0.0.0/1, 128.0.0.0/1) or an on-link route
+        // leaves no router to time.
+        if (route.prefix_length != 0 or route.next_hop.family != AF_INET) return null;
+        if (std.mem.allEqual(u8, &route.next_hop.addr, 0)) return null;
+        // A LUID's top 16 bits are its interface type.
+        return .{ .address = ip4(route.next_hop.addr), .wireless = route.luid >> 48 == IF_TYPE_IEEE80211 };
+    }
+
+    test fromRow {
+        var route: Row = .{
+            .luid = @as(u64, IF_TYPE_IEEE80211) << 48 | 1 << 24,
+            .index = 12,
+            .destination = .{ .family = AF_INET, .addr = @splat(0) },
+            .prefix_length = 0,
+            .next_hop = .{ .family = AF_INET, .addr = .{ 192, 168, 1, 1 } },
+            .unused = @splat(0),
+        };
+        const gateway = fromRow(route).?;
+        try std.testing.expectEqual([4]u8{ 192, 168, 1, 1 }, gateway.address.ip4.bytes);
+        try std.testing.expect(gateway.wireless);
+
+        route.luid = 6 << 48; // Ethernet
+        try std.testing.expect(!fromRow(route).?.wireless);
+        route.prefix_length = 1;
+        try std.testing.expectEqual(null, fromRow(route));
+        route.prefix_length = 0;
+        route.next_hop.addr = @splat(0);
+        try std.testing.expectEqual(null, fromRow(route));
+    }
+};
+
 test {
     _ = linux;
+    _ = windows;
 }

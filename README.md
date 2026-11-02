@@ -151,9 +151,10 @@ edge, and take about 10 seconds.
 
 - **Latency and jitter**: 20 TCP handshakes to the edge, so server processing
   time never counts.
-- **Packet loss**: 50 ICMP echoes over unprivileged sockets. This works without
-  root on macOS, and on Linux when `net.ipv4.ping_group_range` includes your
-  group. Where ICMP is denied, loss shows as `–`.
+- **Packet loss**: 50 ICMP echoes, without root or administrator rights: over
+  unprivileged sockets on macOS, and on Linux when `net.ipv4.ping_group_range`
+  includes your group; through the IP Helper API on Windows. Where ICMP is
+  denied, loss shows as `–`.
 - **Download and upload**: 6 parallel HTTPS streams per direction. The first
   quarter of each phase, while TCP ramps up, is discarded. A phase ends after
   8 s, at 400 MB, or once throughput holds within 5% for a second.
@@ -162,9 +163,9 @@ edge, and take about 10 seconds.
 - **Wi-Fi or ISP**: ICMP echoes to the IPv4 default gateway, idle and every
   200 ms under load. They cross your Wi-Fi or LAN but not your ISP's line, so
   the delay added to them is local and the rest of the delay to the edge is the
-  ISP's. A verdict needs +30 ms under load, or 10 ms idle to the router. Read
-  from the routing table on macOS and Linux; Windows and IPv6-only networks get
-  no verdict. A busy router answers echoes slower, which counts as local.
+  ISP's. A verdict needs +30 ms under load, or 10 ms idle to the router.
+  IPv6-only networks, and Windows behind a VPN, get no verdict. A busy router
+  answers echoes slower, which counts as local.
 
 Cloudflare throttles an IP for about an hour after a burst of downloads over
 10 MB, so requests stay below that. If you are throttled anyway, `speed` says
