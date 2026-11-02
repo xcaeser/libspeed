@@ -21,7 +21,7 @@ jobs:
       - uses: actions/checkout@v5
       - uses: jdx/mise-action@v3
         with:
-          install_args: zig@0.17.0 bun nfpm@2.48.0
+          install_args: zig@0.17.0 nfpm@2.48.0
       - run: zig build test
       - name: Find an unreleased version
         id: version
@@ -29,14 +29,15 @@ jobs:
           tag="v$(sed -n 's/.*\.version = "\(.*\)".*/\1/p' build.zig.zon)"
           gh release view "$tag" > /dev/null 2>&1 || echo "tag=$tag" >> "$GITHUB_OUTPUT"
       - if: steps.version.outputs.tag
-        run: bun scripts/package.ts
+        run: zig build release
       - if: steps.version.outputs.tag
-        run: gh release create "${{ steps.version.outputs.tag }}" --target "$GITHUB_SHA" --generate-notes npm/dist/release/*
+        run: gh release create "${{ steps.version.outputs.tag }}" --target "$GITHUB_SHA" --generate-notes zig-out/release/*
       - name: Publish to npm
         if: steps.version.outputs.tag && env.NODE_AUTH_TOKEN != ''
         run: |
           echo "//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}" > ~/.npmrc
-          for dir in npm/dist/*/; do
-            [ "$dir" = npm/dist/release/ ] || npm publish --access public "$dir"
+          # Platform packages first: the main one depends on them.
+          for dir in zig-out/npm/*/; do
+            [ "$dir" = zig-out/npm/speed/ ] || npm publish --access public "$dir"
           done
-          npm publish --access public npm
+          npm publish --access public zig-out/npm/speed

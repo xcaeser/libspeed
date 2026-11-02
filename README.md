@@ -172,12 +172,12 @@ how long to wait.
 
 ## Build
 
-Requires Zig 0.17 (`mise install`).
+Requires Zig 0.17, and nfpm for `zig build release` (`mise install`).
 
 ```sh
 zig build test
 zig build -Doptimize=ReleaseSmall   # zig-out/{bin,lib,include}
-bun scripts/package.ts             # every platform, into npm/dist
+zig build release                  # every platform, into zig-out/{release,npm}
 ```
 
 ## License

@@ -1,7 +1,4 @@
 .zig-cache/
 zig-out/
-npm/dist/
 node_modules/
 zig-pkg/
-npm/LICENSE
-npm/README.md
