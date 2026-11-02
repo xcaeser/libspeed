@@ -1,7 +1,15 @@
 # speed
 
 Measure your internet connection: download, upload, latency, jitter, packet
-loss, and how much latency grows while the link is busy.
+loss, and how much latency grows while the link is busy. One engine, four ways
+to use it:
+
+1. [CLI](#cli): the `speed` binary for macOS, Linux and Windows
+2. [C library](#c-library): `libspeed.a` and `speed.h`, for C, Go, Swift and anything with a C FFI
+3. [Zig package](#zig-package): the `speed` module
+4. [SDKs](#sdks): TypeScript for Bun
+
+## CLI
 
 ```
 $ speed run
@@ -14,7 +22,7 @@ $ speed run
   Cloudflare CDG
 ```
 
-## Install
+### Install
 
 ```sh
 bunx @xcaeser/speed run        # or: npx @xcaeser/speed run
@@ -25,18 +33,16 @@ Or download from [Releases](https://github.com/xcaeser/libspeed/releases):
 
 | Platform | Download |
 | --- | --- |
-| macOS | `speed-<version>.dmg` (Apple Silicon and Intel) |
+| macOS | `speed-darwin-arm64`, `speed-darwin-x64` |
 | Debian, Ubuntu | `speed_<version>_amd64.deb`, `_arm64.deb` |
 | Fedora, RHEL, openSUSE | `speed-<version>-1.x86_64.rpm`, `.aarch64.rpm` |
 | Any Linux | `speed-linux-x64`, `speed-linux-arm64`, static binaries |
 | Windows | `speed-win32-x64.exe`, `speed-win32-arm64.exe` |
 
-`speed upgrade` keeps a downloaded binary current.
+`speed upgrade` keeps a downloaded binary current. If macOS refuses to open a
+downloaded binary, run `xattr -d com.apple.quarantine speed` once.
 
-The macOS binary is not notarized yet. If macOS refuses to open it, run
-`xattr -d com.apple.quarantine speed` once.
-
-## Commands
+### Commands
 
 | Command | |
 | --- | --- |
@@ -44,7 +50,7 @@ The macOS binary is not notarized yet. If macOS refuses to open it, run
 | `speed upgrade` | Replace the binary with the latest release, verified by SHA-256. |
 | `speed version` | Print the version. |
 
-## JSON
+### JSON
 
 `speed run --json` prints only the result, for scripts and dashboards. Rates
 are in bits per second, latencies in milliseconds, and loss is a fraction
@@ -72,6 +78,55 @@ speed run --json | jq '.download.bps.p50 / 1e6'
 }
 ```
 
+## C library
+
+Each release has `speed.h` and `libspeed-<platform>.a` for static linking, and
+`libspeed-<platform>.tar.gz` with the header, static and shared libraries. See
+[`speed.h`](include/speed.h) for the API: one blocking call, `speed_run`, with
+an optional progress callback.
+
+```c
+speed_result r;
+if (speed_run(NULL, NULL, NULL, &r) == SPEED_OK)
+    printf("%.0f Mbps down\n", r.download.bps.p50 / 1e6);
+```
+
+On Windows only the DLL ships.
+
+## Zig package
+
+```sh
+zig fetch --save https://github.com/xcaeser/libspeed/archive/v<version>.tar.gz
+```
+
+```zig
+// build.zig
+const libspeed = b.dependency("libspeed", .{ .target = target, .optimize = optimize });
+exe.root_module.addImport("speed", libspeed.module("speed"));
+```
+
+```zig
+const speed = @import("speed");
+
+const result = try speed.run(io, gpa, .{});
+std.debug.print("{d:.0} Mbps down\n", .{result.download.bps.p50 / 1e6});
+```
+
+## SDKs
+
+### TypeScript (Bun)
+
+```ts
+import { run } from "@xcaeser/speed";
+
+const result = await run({ onProgress: (p) => console.log(p.phase, p.value) });
+console.log(result.download.bps.p50 / 1e6, "Mbps down");
+```
+
+The test runs in a worker, so it never blocks the event loop.
+
+Go and Swift link the [C library](#c-library) directly.
+
 ## How it measures
 
 Tests run against the nearest [Cloudflare speed test](https://speed.cloudflare.com)
@@ -91,55 +146,6 @@ edge, and take about 10 seconds.
 Cloudflare throttles an IP for about an hour after a burst of downloads over
 10 MB, so requests stay below that. If you are throttled anyway, `speed` says
 how long to wait.
-
-## Library
-
-`libspeed` is the same engine as a Zig module and a C library.
-
-### Zig
-
-```sh
-zig fetch --save https://github.com/xcaeser/libspeed/archive/v<version>.tar.gz
-```
-
-```zig
-// build.zig
-const libspeed = b.dependency("libspeed", .{ .target = target, .optimize = optimize });
-exe.root_module.addImport("speed", libspeed.module("speed"));
-```
-
-```zig
-const speed = @import("speed");
-
-const result = try speed.run(io, gpa, .{});
-std.debug.print("{d:.0} Mbps down\n", .{result.download.bps.p50 / 1e6});
-```
-
-### C, Go, Swift and others
-
-Each release has `speed.h` and `libspeed-<platform>.a` for static linking, and
-`libspeed-<platform>.tar.gz` with the header, static and shared libraries. See
-[`speed.h`](include/speed.h) for the API: one blocking call, `speed_run`, with
-an optional progress callback.
-
-```c
-speed_result r;
-if (speed_run(NULL, NULL, NULL, &r) == SPEED_OK)
-    printf("%.0f Mbps down\n", r.download.bps.p50 / 1e6);
-```
-
-On Windows only the DLL ships.
-
-### TypeScript (Bun)
-
-```ts
-import { run } from "@xcaeser/speed";
-
-const result = await run({ onProgress: (p) => console.log(p.phase, p.value) });
-console.log(result.download.bps.p50 / 1e6, "Mbps down");
-```
-
-The test runs in a worker, so it never blocks the event loop.
 
 ## Build
 
