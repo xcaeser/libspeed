@@ -22,14 +22,6 @@ jobs:
           install_args: zig@0.17.0
       - run: zig build test
       - run: zig build run -- run --json
-      - name: Diagnose gateway (temporary)
-        shell: bash
-        run: |
-          printf '%s\n' 'const std = @import("std");' 'pub fn main(init: std.process.Init) !void {' '    std.debug.print("{any}\n", .{try @import("gateway.zig").find(init.io, init.gpa)});' '}' > src/diag.zig
-          zig run src/diag.zig
-          route print -4 | head -30
-          ping -n 3 1.1.1.1 || true
-          ping -n 3 "$(route print -4 | awk '$1=="0.0.0.0" {print $3; exit}')" || true
 
   release:
     needs: windows
