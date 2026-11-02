@@ -34,9 +34,10 @@ for (const [platform, zig] of Object.entries(targets)) {
   // `speed upgrade` looks for exactly these names.
   const exe = os === "win32" ? "speed.exe" : "speed";
   await cp(`${prefix}/bin/${exe}`, `${release}/speed-${platform}${os === "win32" ? ".exe" : ""}`);
-  // Shared libraries keep their names inside the tarball: the dylib's install
-  // name and the .so's soname are what loaders look for.
-  await $`tar -czf ${release}/libspeed-${platform}.tar.gz -C ${prefix} include lib ${os === "win32" ? "bin/speed.dll" : []}`;
+  // The whole install prefix, which is what `mise use github:xcaeser/libspeed`
+  // picks. Shared libraries keep their names: the dylib's install name and the
+  // .so's soname are what loaders look for.
+  await $`tar -czf ${release}/libspeed-${platform}.tar.gz -C ${prefix} bin include lib`;
   if (os !== "win32") await cp(`${prefix}/lib/libspeed.a`, `${release}/libspeed-${platform}.a`);
   if (os === "linux") await linuxPackages(`${prefix}/bin/speed`, cpu!);
 

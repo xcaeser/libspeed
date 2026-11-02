@@ -25,6 +25,8 @@ $ speed run
 ### Install
 
 ```sh
+curl -fsSL https://raw.githubusercontent.com/xcaeser/libspeed/main/install.sh | sh
+mise use -g github:xcaeser/libspeed
 bunx @xcaeser/speed run        # or: npx @xcaeser/speed run
 npm install -g @xcaeser/speed  # then: speed run
 ```
@@ -81,7 +83,7 @@ speed run --json | jq '.download.bps.p50 / 1e6'
 ## C library
 
 Each release has `speed.h` and `libspeed-<platform>.a` for static linking, and
-`libspeed-<platform>.tar.gz` with the header, static and shared libraries. See
+`libspeed-<platform>.tar.gz` with the header, static and shared libraries, and the CLI. See
 [`speed.h`](include/speed.h) for the API: one blocking call, `speed_run`, with
 an optional progress callback.
 
