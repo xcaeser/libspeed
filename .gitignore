@@ -1,0 +1,5 @@
+.zig-cache/
+zig-out/
+npm/dist/
+node_modules/
+zig-pkg/
