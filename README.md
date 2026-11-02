@@ -1,8 +1,8 @@
 # speed
 
 Measure your internet connection: download, upload, latency, jitter, packet
-loss, and how much latency grows while the link is busy. One engine, four ways
-to use it:
+loss, how much latency grows while the link is busy, and whether your Wi-Fi or
+your ISP is to blame. One engine, four ways to use it:
 
 1. [CLI](#cli): the `speed` binary for macOS, Linux and Windows
 2. [C library](#c-library): `libspeed.a` and `speed.h`, for C, Go, Swift and anything with a C FFI
@@ -18,9 +18,16 @@ $ speed run
   Upload      311 Mbps  78.8 ms under load
   Latency       8.6 ms  jitter 2.3 ms
   Loss            0.0%
+  Wi-Fi         4.3 ms  52.1 ms under load
+
+  Your Wi-Fi adds 48 ms while uploading, enough for calls and games to feel it.
+  Ethernet avoids it.
 
   Cloudflare CDG
 ```
+
+The verdict appears only when something adds a noticeable delay. The `Wi-Fi`
+row (`Router` on a wired connection) is the round trip to your router.
 
 ### Install
 
@@ -56,7 +63,8 @@ downloaded binary, run `xattr -d com.apple.quarantine speed` once.
 
 `speed run --json` prints only the result, for scripts and dashboards. Rates
 are in bits per second, latencies in milliseconds, and loss is a fraction
-(`null` when ICMP is denied).
+(`null` when ICMP is denied). `gateway` is `null` when the router is unknown or
+ignores ICMP; `verdict` is `null` when nothing noticeable slows the connection.
 
 ```sh
 speed run --json | jq '.download.bps.p50 / 1e6'
@@ -71,12 +79,19 @@ speed run --json | jq '.download.bps.p50 / 1e6'
   "loss": 0,
   "download": {
     "bps": { "p10": 1544177088, "p50": 1619187504, "p90": 1699716096 },
-    "latency_ms": { "p10": 9.57, "p50": 29.07, "p90": 151.67 }
+    "latency_ms": { "p10": 9.57, "p50": 29.07, "p90": 151.67 },
+    "gateway_latency_ms": { "p10": 7.08, "p50": 20.17, "p90": 31.44 }
   },
   "upload": {
     "bps": { "p10": 301926656, "p50": 315184848, "p90": 598921184 },
-    "latency_ms": { "p10": 23.48, "p50": 43.09, "p90": 60.92 }
-  }
+    "latency_ms": { "p10": 23.48, "p50": 43.09, "p90": 60.92 },
+    "gateway_latency_ms": { "p10": 4.91, "p50": 8.87, "p90": 15.25 }
+  },
+  "gateway": {
+    "wireless": true,
+    "latency_ms": { "p10": 2.9, "p50": 3.74, "p90": 5.0 }
+  },
+  "verdict": { "segment": "isp", "phase": "upload", "added_ms": 30.08 }
 }
 ```
 
@@ -144,6 +159,12 @@ edge, and take about 10 seconds.
   8 s, at 400 MB, or once throughput holds within 5% for a second.
 - **Under load**: TCP handshakes repeated every 200 ms while the link is
   saturated. The gap from idle latency shows bufferbloat.
+- **Wi-Fi or ISP**: ICMP echoes to the IPv4 default gateway, idle and every
+  200 ms under load. They cross your Wi-Fi or LAN but not your ISP's line, so
+  the delay added to them is local and the rest of the delay to the edge is the
+  ISP's. A verdict needs +30 ms under load, or 10 ms idle to the router. Read
+  from the routing table on macOS and Linux; Windows and IPv6-only networks get
+  no verdict. A busy router answers echoes slower, which counts as local.
 
 Cloudflare throttles an IP for about an hour after a burst of downloads over
 10 MB, so requests stay below that. If you are throttled anyway, `speed` says

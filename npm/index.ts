@@ -13,6 +13,24 @@ export interface Load {
   bps: Summary;
   /** Round trip while the link is saturated. */
   latencyMs: Summary;
+  /** Round trip to the router while the link is saturated; null if unknown. */
+  gatewayLatencyMs: Summary | null;
+}
+
+export interface Gateway {
+  /** Reached over Wi-Fi. */
+  wireless: boolean;
+  /** Idle round trip to the router. */
+  latencyMs: Summary;
+}
+
+/** Which side of the router makes the connection feel slow. */
+export interface Verdict {
+  /** "local": Wi-Fi, cabling or the router. "isp": the line beyond it. */
+  segment: "local" | "isp";
+  /** "latency": every request; otherwise the direction that fills the queue. */
+  phase: Phase;
+  addedMs: number;
 }
 
 export interface Result {
@@ -25,6 +43,10 @@ export interface Result {
   loss: number | null;
   download: Load;
   upload: Load;
+  /** Null when the router is unknown or ignores ICMP. */
+  gateway: Gateway | null;
+  /** Null when nothing noticeable slows the connection, or without a router. */
+  verdict: Verdict | null;
 }
 
 export interface Progress {

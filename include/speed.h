@@ -38,8 +38,27 @@ typedef struct {
 
 typedef struct {
     speed_summary bps;
-    speed_summary latency_ms; /* round trip while saturated */
+    speed_summary latency_ms;         /* round trip while saturated */
+    speed_summary gateway_latency_ms; /* to the router while saturated; NaN if unknown */
 } speed_load;
+
+typedef struct {
+    speed_summary latency_ms; /* idle round trip to the router; NaN if unknown */
+    uint8_t wireless;         /* 1 when reached over Wi-Fi */
+} speed_gateway;
+
+typedef enum {
+    SPEED_SEGMENT_NONE, /* nothing noticeable, or the router is unknown */
+    SPEED_SEGMENT_LOCAL, /* Wi-Fi, cabling or the router */
+    SPEED_SEGMENT_ISP,   /* the line beyond the router */
+} speed_segment;
+
+/* Which side of the router makes the connection feel slow. */
+typedef struct {
+    speed_segment segment;
+    speed_phase phase; /* LATENCY: every request; DOWNLOAD/UPLOAD: while busy that way */
+    double added_ms;
+} speed_verdict;
 
 typedef struct {
     char colo[4]; /* edge location code, e.g. "CDG"; empty if unknown */
@@ -49,6 +68,8 @@ typedef struct {
     double loss; /* fraction of ICMP echoes lost; NaN if ICMP is denied */
     speed_load download;
     speed_load upload;
+    speed_gateway gateway;
+    speed_verdict verdict;
 } speed_result;
 
 /* `value` is ms during SPEED_PHASE_LATENCY, bits per second otherwise.

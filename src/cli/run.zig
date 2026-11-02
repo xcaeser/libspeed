@@ -99,8 +99,45 @@ fn report(w: *Io.Writer, r: speed.Result, color: bool) !void {
     try w.print("  {s:<10}{s}{s:>10}{s}  {s}{s}{s}\n", .{ "Upload", b, try rate(&v, r.upload.bps.p50), x, d, try loaded(&s, r.upload.latency.p50), x });
     try w.print("  {s:<10}{s}{s:>10}{s}  {s}jitter {s}{s}\n", .{ "Latency", b, try ms(&v, r.latency.p50), x, d, try ms(&s, r.jitter), x });
     try w.print("  {s:<10}{s}{s:>10}{s}\n", .{ "Loss", b, if (r.loss) |l| try percent(&v, l) else "–", x });
+    if (r.gateway) |g| {
+        try w.print("  {s:<10}{s}{s:>10}{s}", .{ if (g.wireless) "Wi-Fi" else "Router", b, try ms(&v, g.latency.p50), x });
+        if (busiest(r.download.gateway_latency, r.upload.gateway_latency)) |busy| try w.print("  {s}{s}{s}", .{ d, try loaded(&s, busy), x });
+        try w.writeByte('\n');
+    }
+    if (r.verdict) |verdict| try w.print("\n{f}", .{Advice{ .verdict = verdict, .wireless = r.gateway.?.wireless }});
     if (r.colo) |c| try w.print("\n  {s}Cloudflare {s}{s}\n", .{ d, &c, x });
 }
+
+/// The higher of two loaded p50s, either of which may be unknown.
+fn busiest(a: ?speed.Summary, b: ?speed.Summary) ?f64 {
+    const x = a orelse return if (b) |y| y.p50 else null;
+    const y = b orelse return x.p50;
+    return @max(x.p50, y.p50);
+}
+
+/// Where the delay comes from, what it does, and what to do about it.
+const Advice = struct {
+    verdict: speed.Verdict,
+    wireless: bool,
+
+    pub fn format(a: Advice, w: *Io.Writer) Io.Writer.Error!void {
+        const v = a.verdict;
+        const culprit = switch (v.segment) {
+            .local => if (a.wireless) "Your Wi-Fi" else "Your home network",
+            .isp => "Your internet line",
+        };
+        const when = switch (v.phase) {
+            .latency => "to every request",
+            .download => "while downloading",
+            .upload => "while uploading",
+        };
+        try w.print("  {s} adds {d:.0} ms {s}, enough for calls and games to feel it.\n", .{ culprit, v.added, when });
+        try w.writeAll(switch (v.segment) {
+            .local => if (!a.wireless) "" else if (v.phase == .latency) "  Moving closer to the router helps.\n" else "  Ethernet avoids it.\n",
+            .isp => "  Smart queue management (SQM) on your router fixes it.\n",
+        });
+    }
+};
 
 fn loaded(buf: []u8, latency: f64) ![]const u8 {
     var m: [16]u8 = undefined;
@@ -132,14 +169,29 @@ const Json = struct {
     loss: ?f64,
     download: Load,
     upload: Load,
+    gateway: ?Gateway,
+    verdict: ?Verdict,
 
     const Load = struct {
         bps: speed.Summary,
         latency_ms: speed.Summary,
+        gateway_latency_ms: ?speed.Summary,
 
         fn of(l: speed.Load) Load {
-            return .{ .bps = l.bps, .latency_ms = l.latency };
+            return .{ .bps = l.bps, .latency_ms = l.latency, .gateway_latency_ms = l.gateway_latency };
         }
+    };
+
+    const Gateway = struct {
+        wireless: bool,
+        latency_ms: speed.Summary,
+    };
+
+    const Verdict = struct {
+        segment: speed.Verdict.Segment,
+        /// "latency" for every request, else the direction under load.
+        phase: speed.Phase,
+        added_ms: f64,
     };
 
     fn of(r: *const speed.Result) Json {
@@ -151,6 +203,8 @@ const Json = struct {
             .loss = r.loss,
             .download = .of(r.download),
             .upload = .of(r.upload),
+            .gateway = if (r.gateway) |g| .{ .wireless = g.wireless, .latency_ms = g.latency } else null,
+            .verdict = if (r.verdict) |v| .{ .segment = v.segment, .phase = v.phase, .added_ms = v.added } else null,
         };
     }
 };

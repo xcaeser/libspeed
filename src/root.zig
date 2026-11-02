@@ -1,15 +1,17 @@
 //! Measures internet connection quality against Cloudflare's speed test edge:
-//! latency, jitter, packet loss, download and upload throughput, and how
-//! latency degrades while the link is saturated.
+//! latency, jitter, packet loss, download and upload throughput, how latency
+//! degrades while the link is saturated, and which side of the router causes it.
 const std = @import("std");
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
 
+const gateway = @import("gateway.zig");
 const icmp = @import("icmp.zig");
 const load = @import("load.zig");
 const probe = @import("probe.zig");
 
 pub const Summary = @import("Summary.zig");
+pub const Verdict = @import("Verdict.zig");
 pub const Load = load.Result;
 pub const min_duration = load.min_duration;
 
@@ -69,6 +71,18 @@ pub const Result = struct {
     loss: ?f64,
     download: Load,
     upload: Load,
+    /// Null when the gateway is unknown or ignores ICMP.
+    gateway: ?Gateway,
+    /// Null when nothing noticeable slows the connection, or without a gateway.
+    verdict: ?Verdict,
+};
+
+/// The router this device reaches the internet through.
+pub const Gateway = struct {
+    /// Reached over Wi-Fi.
+    wireless: bool,
+    /// Idle echo round trip, in ms.
+    latency: Summary,
 };
 
 pub fn run(io: Io, gpa: Allocator, options: Options) !Result {
@@ -90,6 +104,12 @@ pub fn run(io: Io, gpa: Allocator, options: Options) !Result {
     var loss_future = try io.concurrent(icmp.loss, .{ io, resolved.address, .{} });
     defer if (loss_future.cancel(io)) |_| {} else |_| {};
 
+    const router = try gateway.find(io, gpa);
+    const gateway_pings = try gpa.alloc(f64, options.pings);
+    defer gpa.free(gateway_pings);
+    var gateway_future = try io.concurrent(echoes, .{ io, if (router) |r| r.address else null, gateway_pings });
+    defer if (gateway_future.cancel(io)) |_| {} else |_| {};
+
     const pings = try gpa.alloc(f64, options.pings);
     defer gpa.free(pings);
     for (pings, 1..) |*p, i| {
@@ -107,6 +127,14 @@ pub fn run(io: Io, gpa: Allocator, options: Options) !Result {
         error.Canceled => |e| return e,
         else => null,
     };
+    const gateway_replies = gateway_future.await(io) catch |err| switch (err) {
+        error.Canceled => |e| return e,
+        else => gateway_pings[0..0],
+    };
+    const gateway_result: ?Gateway = if (gateway_replies.len > 0) .{
+        .wireless = router.?.wireless,
+        .latency = .of(gateway_replies),
+    } else null;
 
     const load_options: load.Options = .{
         .streams = options.streams,
@@ -115,17 +143,42 @@ pub fn run(io: Io, gpa: Allocator, options: Options) !Result {
         .down_url = down_url,
         .up_url = up_url,
         .target = resolved.address,
+        .gateway = if (gateway_result != null) router.?.address else null,
         .retry_after = &diagnostics.retry_after,
     };
+    const latency: Summary = .of(pings);
+    const download = try measure(io, gpa, &client, .download, load_options, options.listener);
+    const upload = try measure(io, gpa, &client, .upload, load_options, options.listener);
     return .{
         .colo = colo,
         .dns = resolved.ms,
-        .latency = .of(pings),
+        .latency = latency,
         .jitter = jitter,
         .loss = loss,
-        .download = try measure(io, gpa, &client, .download, load_options, options.listener),
-        .upload = try measure(io, gpa, &client, .upload, load_options, options.listener),
+        .download = download,
+        .upload = upload,
+        .gateway = gateway_result,
+        .verdict = if (gateway_result) |g| Verdict.of(latency.p50, g.latency.p50, download, upload) else null,
     };
+}
+
+/// Fills `out` with echo round trips to `target` and returns those that got a
+/// reply, or none without a target.
+fn echoes(io: Io, target: ?Io.net.IpAddress, out: []f64) ![]f64 {
+    var echo: icmp.Echo = try .open(io, target orelse return out[0..0]);
+    defer echo.close(io);
+    var len: usize = 0;
+    for (out) |_| {
+        if (echo.ms(io)) |ms| {
+            out[len] = ms;
+            len += 1;
+        } else |err| switch (err) {
+            error.Timeout => {},
+            else => |e| return e,
+        }
+        try io.sleep(.fromMilliseconds(50), .awake);
+    }
+    return out[0..len];
 }
 
 fn measure(io: Io, gpa: Allocator, client: *std.http.Client, direction: load.Direction, options: load.Options, listener: ?Listener) !Load {
@@ -168,7 +221,9 @@ fn edge(client: *std.http.Client, down_url: []const u8, diagnostics: *Diagnostic
 }
 
 test {
+    _ = gateway;
     _ = icmp;
+    _ = Verdict;
     _ = load;
     _ = Summary;
 }

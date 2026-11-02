@@ -5,6 +5,8 @@ const std = @import("std");
 const Io = std.Io;
 const net = Io.net;
 
+const probe = @import("probe.zig");
+
 const header_len = 8;
 const token_len = 8;
 
@@ -19,8 +21,7 @@ pub const Options = struct {
 /// firewall dropping ICMP says nothing about the link.
 pub fn loss(io: Io, target: net.IpAddress, options: Options) !f64 {
     const v6 = target == .ip6;
-    const local: net.IpAddress = if (v6) .{ .ip6 = .unspecified(0) } else .{ .ip4 = .unspecified(0) };
-    const socket = try local.bind(io, .{ .mode = .dgram, .protocol = if (v6) .icmpv6 else .icmp });
+    const socket = try bind(io, v6);
     defer socket.close(io);
 
     var token: [token_len]u8 = undefined;
@@ -40,6 +41,46 @@ pub fn loss(io: Io, target: net.IpAddress, options: Options) !f64 {
     const received = replied.count();
     if (received == 0) return error.NoReplies;
     return 1 - @as(f64, @floatFromInt(received)) / @as(f64, @floatFromInt(options.count));
+}
+
+/// Times echoes to one host, one at a time.
+pub const Echo = struct {
+    socket: net.Socket,
+    target: net.IpAddress,
+    token: [token_len]u8,
+    seq: u8 = 0,
+    timeout: Io.Duration = .fromMilliseconds(1000),
+
+    pub fn open(io: Io, target: net.IpAddress) !Echo {
+        var token: [token_len]u8 = undefined;
+        io.random(&token);
+        return .{ .socket = try bind(io, target == .ip6), .target = target, .token = token };
+    }
+
+    pub fn close(e: *Echo, io: Io) void {
+        e.socket.close(io);
+    }
+
+    /// Round trip of one echo in ms, or error.Timeout when no reply arrives
+    /// in time. Late replies to earlier echoes are ignored.
+    pub fn ms(e: *Echo, io: Io) !f64 {
+        const v6 = e.target == .ip6;
+        e.seq +%= 1;
+        const request = echoRequest(v6, e.seq, e.token);
+        const start = Io.Clock.awake.now(io);
+        try e.socket.send(io, &e.target, &request);
+        const deadline: Io.Timeout = .{ .deadline = .{ .raw = start.addDuration(e.timeout), .clock = .awake } };
+        var buf: [1500]u8 = undefined;
+        while (true) {
+            const message = try e.socket.receiveTimeout(io, &buf, deadline);
+            if (replySeq(message.data, v6, e.token) == e.seq) return probe.ms(start.untilNow(io, .awake));
+        }
+    }
+};
+
+fn bind(io: Io, v6: bool) !net.Socket {
+    const local: net.IpAddress = if (v6) .{ .ip6 = .unspecified(0) } else .{ .ip4 = .unspecified(0) };
+    return local.bind(io, .{ .mode = .dgram, .protocol = if (v6) .icmpv6 else .icmp });
 }
 
 /// Records replies until `until`.

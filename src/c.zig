@@ -14,6 +14,20 @@ const Summary = extern struct { p10: f64, p50: f64, p90: f64 };
 const Load = extern struct {
     bps: Summary,
     latency_ms: Summary,
+    gateway_latency_ms: Summary,
+};
+
+const Gateway = extern struct {
+    latency_ms: Summary,
+    wireless: u8,
+};
+
+const Segment = enum(c_int) { none, local, isp };
+
+const Verdict = extern struct {
+    segment: Segment,
+    phase: c_int,
+    added_ms: f64,
 };
 
 const Result = extern struct {
@@ -24,12 +38,16 @@ const Result = extern struct {
     loss: f64,
     download: Load,
     upload: Load,
+    gateway: Gateway,
+    verdict: Verdict,
 };
 
 comptime {
-    // sdk/ts decodes these by offset.
+    // npm/worker.ts decodes these by offset.
     std.debug.assert(@sizeOf(Options) == 24);
-    std.debug.assert(@sizeOf(Result) == 152);
+    std.debug.assert(@sizeOf(Result) == 248);
+    std.debug.assert(@offsetOf(Result, "gateway") == 200);
+    std.debug.assert(@offsetOf(Result, "verdict") == 232);
 }
 
 const Status = enum(c_int) { ok, rate_limited, dns, network, out_of_memory, invalid_options };
@@ -90,9 +108,20 @@ export fn speed_run(options: ?*const Options, callback: ?ProgressFn, context: ?*
         .loss = r.loss orelse std.math.nan(f64),
         .download = load(r.download),
         .upload = load(r.upload),
+        .gateway = if (r.gateway) |g| .{ .latency_ms = summary(g.latency), .wireless = @intFromBool(g.wireless) } else .{ .latency_ms = unknown, .wireless = 0 },
+        .verdict = if (r.verdict) |v| .{
+            .segment = switch (v.segment) {
+                .local => .local,
+                .isp => .isp,
+            },
+            .phase = @backingInt(v.phase),
+            .added_ms = v.added,
+        } else .{ .segment = .none, .phase = 0, .added_ms = 0 },
     };
     return .ok;
 }
+
+const unknown: Summary = .{ .p10 = std.math.nan(f64), .p50 = std.math.nan(f64), .p90 = std.math.nan(f64) };
 
 fn summary(s: speed.Summary) Summary {
     return .{ .p10 = s.p10, .p50 = s.p50, .p90 = s.p90 };
@@ -102,5 +131,6 @@ fn load(l: speed.Load) Load {
     return .{
         .bps = summary(l.bps),
         .latency_ms = summary(l.latency),
+        .gateway_latency_ms = if (l.gateway_latency) |g| summary(g) else unknown,
     };
 }

@@ -6,6 +6,7 @@ const http = std.http;
 const Allocator = std.mem.Allocator;
 
 const Summary = @import("Summary.zig");
+const icmp = @import("icmp.zig");
 const probe = @import("probe.zig");
 
 pub const Direction = enum { download, upload };
@@ -15,6 +16,9 @@ pub const Result = struct {
     bps: Summary,
     /// TCP connect time to the server while the link is saturated, in ms.
     latency: Summary,
+    /// Echo round trip to the gateway while the link is saturated, in ms, or
+    /// null without a gateway or when none of its echoes came back.
+    gateway_latency: ?Summary,
 };
 
 pub const Options = struct {
@@ -24,6 +28,7 @@ pub const Options = struct {
     down_url: []const u8,
     up_url: []const u8,
     target: Io.net.IpAddress,
+    gateway: ?Io.net.IpAddress,
     /// Set to the server's Retry-After when it throttles this IP.
     retry_after: *?Io.Duration,
 };
@@ -130,23 +135,34 @@ const Worker = struct {
     }
 };
 
-const Pinger = struct {
-    shared: *Shared,
-    target: Io.net.IpAddress,
-    samples: []f64,
-    len: usize = 0,
+/// Samples `probe.ms(io)` until the phase stops, skipping failed probes.
+fn Pinger(comptime Probe: type) type {
+    return struct {
+        shared: *Shared,
+        probe: Probe,
+        samples: []f64,
+        len: usize = 0,
 
-    fn run(p: *Pinger) Io.Cancelable!void {
-        const io = p.shared.io;
-        while (!p.shared.stop.load(.acquire) and p.len < p.samples.len) {
-            if (probe.connectMs(io, p.target)) |ms| {
-                p.samples[p.len] = ms;
-                p.len += 1;
-            } else |err| {
-                if (err == error.Canceled) return error.Canceled;
+        fn run(p: *@This()) Io.Cancelable!void {
+            const io = p.shared.io;
+            while (!p.shared.stop.load(.acquire) and p.len < p.samples.len) {
+                if (p.probe.ms(io)) |ms| {
+                    p.samples[p.len] = ms;
+                    p.len += 1;
+                } else |err| {
+                    if (err == error.Canceled) return error.Canceled;
+                }
+                try io.sleep(ping_interval, .awake);
             }
-            try io.sleep(ping_interval, .awake);
         }
+    };
+}
+
+const Connect = struct {
+    target: Io.net.IpAddress,
+
+    fn ms(c: *Connect, io: Io) !f64 {
+        return probe.connectMs(io, c.target);
     }
 };
 
@@ -171,14 +187,23 @@ pub fn measure(
     const tick_ns: u64 = @intCast(tick.toNanoseconds());
     const ticks = try gpa.alloc(u64, duration_ns / tick_ns + 1);
     defer gpa.free(ticks);
-    const pings = try gpa.alloc(f64, duration_ns / @as(u64, @intCast(ping_interval.toNanoseconds())) + 1);
+    const max_pings = duration_ns / @as(u64, @intCast(ping_interval.toNanoseconds())) + 1;
+    const pings = try gpa.alloc(f64, max_pings);
     defer gpa.free(pings);
-    var pinger: Pinger = .{ .shared = &shared, .target = options.target, .samples = pings };
+    var pinger: Pinger(Connect) = .{ .shared = &shared, .probe = .{ .target = options.target }, .samples = pings };
+
+    // Echoes to the gateway cross the local network's queues but not the ISP's.
+    const gateway_pings = try gpa.alloc(f64, max_pings);
+    defer gpa.free(gateway_pings);
+    const echo: ?icmp.Echo = if (options.gateway) |gateway| icmp.Echo.open(io, gateway) catch null else null;
+    var gateway_pinger: ?Pinger(icmp.Echo) = if (echo) |e| .{ .shared = &shared, .probe = e, .samples = gateway_pings } else null;
+    defer if (gateway_pinger) |*p| p.probe.close(io);
 
     var group: Io.Group = .init;
     defer group.cancel(io);
     for (0..options.streams) |_| try group.concurrent(io, Worker.run, .{&shared});
-    try group.concurrent(io, Pinger.run, .{&pinger});
+    try group.concurrent(io, Pinger(Connect).run, .{&pinger});
+    if (gateway_pinger) |*p| try group.concurrent(io, Pinger(icmp.Echo).run, .{p});
 
     const start = Io.Clock.awake.now(io);
     ticks[0] = 0;
@@ -217,6 +242,7 @@ pub fn measure(
     return .{
         .bps = .of(samples.items),
         .latency = .of(pings[0..pinger.len]),
+        .gateway_latency = if (gateway_pinger) |p| if (p.len > 0) .of(gateway_pings[0..p.len]) else null else null,
     };
 }
 

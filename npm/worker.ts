@@ -1,7 +1,7 @@
 // Calls speed_run on this thread; layouts mirror include/speed.h.
 import { dlopen, FFIType, JSCallback, ptr } from "bun:ffi";
 import { dirname, join } from "node:path";
-import type { Load, Options, Phase, Result, Summary } from "./index.ts";
+import type { Load, Options, Phase, Result, Summary, Verdict } from "./index.ts";
 
 declare const self: Worker;
 
@@ -13,6 +13,7 @@ const lib = dlopen(join(dirname(pkg), files[process.platform]!), {
 
 const phases: Phase[] = ["latency", "download", "upload"];
 const errors = [null, "rate_limited", "dns", "network", "out_of_memory", "invalid_options"] as const;
+const segments: (Verdict["segment"] | null)[] = [null, "local", "isp"];
 
 self.onmessage = ({ data }: MessageEvent<Omit<Options, "onProgress">>) => {
   const options = new DataView(new ArrayBuffer(24));
@@ -27,7 +28,7 @@ self.onmessage = ({ data }: MessageEvent<Omit<Options, "onProgress">>) => {
       postMessage({ progress: { phase: phases[phase], value, progress } }),
     { args: [FFIType.ptr, FFIType.i32, FFIType.f64, FFIType.f32], returns: FFIType.void },
   );
-  const out = new Float64Array(19);
+  const out = new Uint8Array(248);
   const status = lib.symbols.speed_run(options, progress.ptr, null, out);
   progress.close();
 
@@ -35,18 +36,24 @@ self.onmessage = ({ data }: MessageEvent<Omit<Options, "onProgress">>) => {
   postMessage({ result: decode(out) });
 };
 
-function decode(f: Float64Array): Result {
-  const colo = new TextDecoder().decode(new Uint8Array(f.buffer, 0, 3));
-  const summary = (i: number): Summary => ({ p10: f[i]!, p50: f[i + 1]!, p90: f[i + 2]! });
-  const known = (x: number) => (Number.isNaN(x) ? null : x);
-  const load = (i: number): Load => ({ bps: summary(i), latencyMs: summary(i + 3) });
+function decode(bytes: Uint8Array): Result {
+  const view = new DataView(bytes.buffer);
+  const f = (offset: number) => view.getFloat64(offset, true);
+  const colo = new TextDecoder().decode(bytes.subarray(0, 3));
+  const summary = (offset: number): Summary => ({ p10: f(offset), p50: f(offset + 8), p90: f(offset + 16) });
+  const known = (offset: number) => (Number.isNaN(f(offset + 8)) ? null : summary(offset));
+  const load = (offset: number): Load => ({ bps: summary(offset), latencyMs: summary(offset + 24), gatewayLatencyMs: known(offset + 48) });
+  const gateway = known(200);
+  const segment = segments[view.getInt32(232, true)];
   return {
     server: colo.startsWith("\0") ? null : colo,
-    dnsMs: f[1]!,
-    latencyMs: summary(2),
-    jitterMs: f[5]!,
-    loss: known(f[6]!),
-    download: load(7),
-    upload: load(13),
+    dnsMs: f(8),
+    latencyMs: summary(16),
+    jitterMs: f(40),
+    loss: Number.isNaN(f(48)) ? null : f(48),
+    download: load(56),
+    upload: load(128),
+    gateway: gateway && { wireless: bytes[224] === 1, latencyMs: gateway },
+    verdict: segment ? { segment, phase: phases[view.getInt32(236, true)]!, addedMs: f(240) } : null,
   };
 }
