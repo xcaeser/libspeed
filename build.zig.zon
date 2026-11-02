@@ -1,7 +1,7 @@
 .{
     .name = .libspeed,
 
-    .version = "1.0.0",
+    .version = "1.0.1",
 
     .fingerprint = 0x7070c41121b3df19,
 

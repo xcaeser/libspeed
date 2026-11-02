@@ -1,6 +1,6 @@
 {
   "name": "@xcaeser/speed",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Measure your internet connection: speed, latency, jitter and packet loss.",
   "license": "MIT",
   "repository": "github:xcaeser/libspeed",
