@@ -1,16 +1,21 @@
 name: release
 
+# Every push to main is tested; a version in build.zig.zon with no release yet
+# is built, tagged and published.
 on:
   push:
-    tags: ["v*"]
+    branches: [main]
 
 permissions:
   contents: write
+
+concurrency: release
 
 jobs:
   release:
     runs-on: macos-latest
     env:
+      GH_TOKEN: ${{ github.token }}
       NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
     steps:
       - uses: actions/checkout@v5
@@ -18,14 +23,17 @@ jobs:
         with:
           install_args: zig@0.17.0 bun nfpm@2.48.0
       - run: zig build test
-      - run: bun scripts/package.ts
-      - name: Check the tag matches build.zig.zon
-        run: test "v$(jq -r .version npm/package.json)" = "$GITHUB_REF_NAME"
-      - run: gh release create "$GITHUB_REF_NAME" --generate-notes npm/dist/release/*
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Find an unreleased version
+        id: version
+        run: |
+          tag="v$(sed -n 's/.*\.version = "\(.*\)".*/\1/p' build.zig.zon)"
+          gh release view "$tag" > /dev/null 2>&1 || echo "tag=$tag" >> "$GITHUB_OUTPUT"
+      - if: steps.version.outputs.tag
+        run: bun scripts/package.ts
+      - if: steps.version.outputs.tag
+        run: gh release create "${{ steps.version.outputs.tag }}" --target "$GITHUB_SHA" --generate-notes npm/dist/release/*
       - name: Publish to npm
-        if: env.NODE_AUTH_TOKEN != ''
+        if: steps.version.outputs.tag && env.NODE_AUTH_TOKEN != ''
         run: |
           echo "//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}" > ~/.npmrc
           for dir in npm/dist/*/; do

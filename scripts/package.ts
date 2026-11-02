@@ -1,7 +1,6 @@
 // Cross-compiles every platform into npm packages (npm/dist/<platform>) and
 // GitHub release assets (npm/dist/release): raw binaries, static libraries,
-// SDK tarballs, a macOS .dmg, and Linux .deb/.rpm. Runs on macOS, which the
-// .dmg needs. Pins versions in npm/package.json.
+// SDK tarballs, and Linux .deb/.rpm. Pins versions in npm/package.json.
 import { $ } from "bun";
 import { cp, mkdir, rm } from "node:fs/promises";
 
@@ -62,20 +61,6 @@ for (const [platform, zig] of Object.entries(targets)) {
 await Bun.write("npm/package.json", JSON.stringify(main, null, 2) + "\n");
 // npm only packs these from the package's own directory.
 for (const file of ["LICENSE", "README.md"]) await cp(file, `npm/${file}`);
-await dmg();
-
-/// One universal binary for both Mac architectures.
-async function dmg() {
-  const stage = "zig-out/dmg";
-  await rm(stage, { recursive: true, force: true });
-  await mkdir(stage, { recursive: true });
-  await $`lipo -create zig-out/aarch64-macos/bin/speed zig-out/x86_64-macos/bin/speed -output ${stage}/speed`;
-  // lipo drops each slice's ad-hoc signature, and Apple Silicon kills unsigned code.
-  await $`codesign --force --sign - ${stage}/speed`;
-  for (const file of ["LICENSE", "README.md"]) await cp(file, `${stage}/${file}`);
-  await $`hdiutil create -quiet -ov -volname ${`speed ${version}`} -srcfolder ${stage} -format UDZO ${release}/speed-${version}.dmg`;
-}
-
 async function linuxPackages(binary: string, cpu: string) {
   const config = `zig-out/nfpm-${cpu}.yaml`;
   await Bun.write(config, `name: speed
