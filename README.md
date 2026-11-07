@@ -60,7 +60,7 @@ downloaded binary, run `xattr -d com.apple.quarantine speed` once.
 
 | Command | |
 | --- | --- |
-| `speed run`, `r` | Run a test. `--json` prints p10/p50/p90 for every figure. |
+| `speed run`, `r` | Run a test. `--explain` says what each figure means; `--json` prints p10/p50/p90 for every figure. |
 | `speed upgrade`, `up` | Replace the binary with the latest release, verified by SHA-256. |
 | `speed version`, `v` | Print the version. |
 

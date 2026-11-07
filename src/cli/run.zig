@@ -16,6 +16,12 @@ pub fn command(options: zli.InitOptions) !*zli.Command {
         .type = .Bool,
         .default_value = .{ .Bool = false },
     });
+    try cmd.addFlag(.{
+        .name = "explain",
+        .description = "Say what each figure means",
+        .type = .Bool,
+        .default_value = .{ .Bool = false },
+    });
     return cmd;
 }
 
@@ -52,7 +58,7 @@ fn exec(ctx: zli.CommandContext) !void {
         return w.writeByte('\n');
     }
     if (tty) try w.writeAll(clear_line);
-    try report(w, result, usual, tty);
+    try report(w, result, usual, .{ .color = tty, .explain = ctx.flag("explain", bool) });
 }
 
 /// Appends the run to the history and returns what is usual on this network.
@@ -106,21 +112,33 @@ const Live = struct {
     }
 };
 
-fn report(w: *Io.Writer, r: speed.Result, usual: ?history.Rates, color: bool) !void {
-    const b = if (color) bold else "";
-    const d = if (color) dim else "";
-    const x = if (color) reset else "";
+const Style = struct { color: bool, explain: bool };
+
+fn report(w: *Io.Writer, r: speed.Result, usual: ?history.Rates, style: Style) !void {
+    const b = if (style.color) bold else "";
+    const d = if (style.color) dim else "";
+    const x = if (style.color) reset else "";
     var v: [32]u8 = undefined;
     var s: [32]u8 = undefined;
+    const note: Note = .{ .w = w, .style = style };
 
-    try loadRow(w, "Download", r.download, if (usual) |u| u.download else null, color);
-    try loadRow(w, "Upload", r.upload, if (usual) |u| u.upload else null, color);
+    try loadRow(w, "Download", r.download, if (usual) |u| u.download else null, style.color);
+    try note.transfer("A 1 GB download", r.download, r.latency.p50);
+    try loadRow(w, "Upload", r.upload, if (usual) |u| u.upload else null, style.color);
+    try note.transfer("Sending 1 GB", r.upload, r.latency.p50);
     try w.print("  {s:<10}{s}{s:>10}{s}  {s}jitter {s}{s}\n", .{ "Latency", b, try ms(&v, r.latency.p50), x, d, try ms(&s, r.jitter), x });
+    // Microsoft rates jitter under 30 ms good for calls, and loss under 1%.
+    try note.line("Reply time from Cloudflare; jitter is how much it varies, fine under 30 ms.", .{});
     try w.print("  {s:<10}{s}{s:>10}{s}\n", .{ "Loss", b, if (r.loss) |l| try percent(&v, l) else "–", x });
+    if (r.loss != null)
+        try note.line("Pings to Cloudflare that got no reply; calls suffer if it stays above 1%.", .{})
+    else
+        try note.line("Pings are blocked here, so loss could not be measured.", .{});
     if (r.gateway) |g| {
         try w.print("  {s:<10}{s}{s:>10}{s}", .{ if (g.wireless) "Wi-Fi" else "Router", b, try ms(&v, g.latency.p50), x });
         if (busiest(r.download.gateway_latency, r.upload.gateway_latency)) |busy| try w.print("  {s}{s}{s}", .{ d, try loaded(&s, busy), x });
         try w.writeByte('\n');
+        try note.line("Replies from your router alone: delay here is yours, not your ISP's.", .{});
     }
     if (r.verdict) |verdict| try w.print("\n{f}", .{Advice{ .verdict = verdict, .wireless = r.gateway.?.wireless }});
     if (r.isp != null or r.colo != null) {
@@ -129,8 +147,34 @@ fn report(w: *Io.Writer, r: speed.Result, usual: ?history.Rates, color: bool) !v
         if (r.isp != null and r.colo != null) try w.writeAll(" · ");
         if (r.colo) |c| try w.print("Cloudflare {s}", .{&c});
         try w.print("{s}\n", .{x});
+        try note.line("{s}", .{if (r.colo == null)
+            "Your provider, as Cloudflare names it."
+        else if (r.isp == null)
+            "The Cloudflare site that answered, by airport code."
+        else
+            "Your provider, and the Cloudflare site that answered, by airport code."});
     }
 }
+
+/// With --explain, one dim line under a row saying what its figure means.
+const Note = struct {
+    w: *Io.Writer,
+    style: Style,
+
+    fn line(n: Note, comptime fmt: []const u8, args: anytype) !void {
+        if (!n.style.explain) return;
+        try n.w.print("    {s}" ++ fmt ++ "{s}\n", .{if (n.style.color) dim else ""} ++ args ++ .{if (n.style.color) reset else ""});
+    }
+
+    /// How long 1 GB takes at this rate, and the reply time while it runs next to idle.
+    fn transfer(n: Note, what: []const u8, l: speed.Load, idle: f64) !void {
+        if (l.bps.p50 <= 0) return;
+        var t: [32]u8 = undefined;
+        var m: [16]u8 = undefined;
+        var i: [16]u8 = undefined;
+        try n.line("{s} takes {s}; replies take {s} meanwhile ({s} idle).", .{ what, try duration(&t, 8e9 / l.bps.p50), try ms(&m, l.latency.p50), try ms(&i, idle) });
+    }
+};
 
 /// A rate with its loaded latency, and what is usual when this run is 20% or more away from it.
 fn loadRow(w: *Io.Writer, label: []const u8, l: speed.Load, usual: ?f64, color: bool) !void {
@@ -174,6 +218,17 @@ const Advice = struct {
         });
     }
 };
+
+fn duration(buf: []u8, seconds: f64) ![]const u8 {
+    if (seconds < 10) return std.fmt.bufPrint(buf, "{d:.1} s", .{seconds});
+    const whole: u64 = @intFromFloat(@round(seconds));
+    if (whole < 60) return std.fmt.bufPrint(buf, "{d} s", .{whole});
+    if (whole < 600 and whole % 60 != 0) return std.fmt.bufPrint(buf, "{d} min {d} s", .{ whole / 60, whole % 60 });
+    const minutes = (whole + 30) / 60;
+    if (minutes < 60) return std.fmt.bufPrint(buf, "{d} min", .{minutes});
+    if (minutes % 60 == 0) return std.fmt.bufPrint(buf, "{d} h", .{minutes / 60});
+    return std.fmt.bufPrint(buf, "{d} h {d} min", .{ minutes / 60, minutes % 60 });
+}
 
 fn loaded(buf: []u8, latency: f64) ![]const u8 {
     var m: [16]u8 = undefined;
@@ -284,7 +339,7 @@ test "report shows the usual rate only when a rate is far from it" {
     const result = testResult();
     var buf: [1024]u8 = undefined;
     var w: Io.Writer = .fixed(&buf);
-    try report(&w, result, .{ .download = 1.25e9, .upload = 1e9 }, false);
+    try report(&w, result, .{ .download = 1.25e9, .upload = 1e9 }, .{ .color = false, .explain = false });
     const out = w.buffered();
     const download = out[0..std.mem.findScalar(u8, out, '\n').?];
     try std.testing.expect(std.mem.endsWith(u8, download, "usually 1.25 Gbps"));
@@ -292,8 +347,31 @@ test "report shows the usual rate only when a rate is far from it" {
     try std.testing.expect(std.mem.endsWith(u8, out, "\n  Orange S.A. · Cloudflare CDG\n"));
 
     w = .fixed(&buf);
-    try report(&w, result, .{ .download = 1.1e9, .upload = 0.9e9 }, false);
+    try report(&w, result, .{ .download = 1.1e9, .upload = 0.9e9 }, .{ .color = false, .explain = false });
     try std.testing.expectEqual(0, std.mem.count(u8, w.buffered(), "usually"));
+}
+
+test duration {
+    var buf: [32]u8 = undefined;
+    try std.testing.expectEqualStrings("0.8 s", try duration(&buf, 0.8));
+    try std.testing.expectEqualStrings("17 s", try duration(&buf, 16.6));
+    try std.testing.expectEqualStrings("1 min 23 s", try duration(&buf, 83.2));
+    try std.testing.expectEqualStrings("1 min", try duration(&buf, 60));
+    try std.testing.expectEqualStrings("13 min", try duration(&buf, 800));
+    try std.testing.expectEqualStrings("2 h 13 min", try duration(&buf, 8000));
+}
+
+test "explain puts the run's own numbers under each row" {
+    var result = testResult();
+    result.loss = null;
+    var buf: [2048]u8 = undefined;
+    var w: Io.Writer = .fixed(&buf);
+    try report(&w, result, null, .{ .color = false, .explain = true });
+    const out = w.buffered();
+    try std.testing.expect(std.mem.containsAtLeast(u8, out, 1, "under load\n    A 1 GB download takes 8.0 s; replies take 20.0 ms meanwhile (8.0 ms idle).\n"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, out, 1, "–\n    Pings are blocked here"));
+    var lines = std.mem.splitScalar(u8, out, '\n');
+    while (lines.next()) |line| try std.testing.expect(try std.unicode.utf8CountCodepoints(line) <= 80);
 }
 
 test "history reads back the runs this command records" {
