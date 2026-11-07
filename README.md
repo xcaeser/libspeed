@@ -20,7 +20,7 @@ $ speed run
   Loss            0.0%
   Wi-Fi         4.3 ms  52.1 ms under load
 
-  Your Wi-Fi adds 48 ms while uploading, enough for calls and games to feel it.
+  Your Wi-Fi adds 48 ms while uploading; calls and games feel it.
   Ethernet avoids it.
 
   Orange S.A. · Cloudflare CDG

@@ -172,7 +172,7 @@ const Note = struct {
         var t: [32]u8 = undefined;
         var m: [16]u8 = undefined;
         var i: [16]u8 = undefined;
-        try n.line("{s} takes {s}; replies take {s} meanwhile ({s} idle).", .{ what, try duration(&t, 8e9 / l.bps.p50), try ms(&m, l.latency.p50), try ms(&i, idle) });
+        try n.line("{s} takes {s}, with replies at {s} ({s} idle).", .{ what, try duration(&t, 8e9 / l.bps.p50), try ms(&m, l.latency.p50), try ms(&i, idle) });
     }
 };
 
@@ -211,7 +211,7 @@ const Advice = struct {
             .download => "while downloading",
             .upload => "while uploading",
         };
-        try w.print("  {s} adds {d:.0} ms {s}, enough for calls and games to feel it.\n", .{ culprit, v.added, when });
+        try w.print("  {s} adds {d:.0} ms {s}; calls and games feel it.\n", .{ culprit, v.added, when });
         try w.writeAll(switch (v.segment) {
             .local => if (!a.wireless) "" else if (v.phase == .latency) "  Moving closer to the router helps.\n" else "  Ethernet avoids it.\n",
             .isp => "  Smart queue management (SQM) on your router fixes it.\n",
@@ -368,10 +368,28 @@ test "explain puts the run's own numbers under each row" {
     var w: Io.Writer = .fixed(&buf);
     try report(&w, result, null, .{ .color = false, .explain = true });
     const out = w.buffered();
-    try std.testing.expect(std.mem.containsAtLeast(u8, out, 1, "under load\n    A 1 GB download takes 8.0 s; replies take 20.0 ms meanwhile (8.0 ms idle).\n"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, out, 1, "under load\n    A 1 GB download takes 8.0 s, with replies at 20.0 ms (8.0 ms idle).\n"));
     try std.testing.expect(std.mem.containsAtLeast(u8, out, 1, "–\n    Pings are blocked here"));
-    var lines = std.mem.splitScalar(u8, out, '\n');
-    while (lines.next()) |line| try std.testing.expect(try std.unicode.utf8CountCodepoints(line) <= 80);
+}
+
+test "every line fits 80 columns, verdict and explanations included" {
+    var result = testResult();
+    result.loss = 0.02;
+    result.gateway = .{ .wireless = true, .latency = result.latency };
+    result.download.bps = .{ .p10 = 1e6, .p50 = 1e6, .p90 = 1e6 };
+    result.download.latency = .{ .p10 = 1234, .p50 = 1234, .p90 = 1234 };
+    result.download.gateway_latency = result.download.latency;
+    for ([_]speed.Verdict.Segment{ .local, .isp }) |segment| {
+        result.verdict = .{ .segment = segment, .phase = .download, .added = 1234 };
+        var buf: [4096]u8 = undefined;
+        var w: Io.Writer = .fixed(&buf);
+        try report(&w, result, .{ .download = 1e9, .upload = 1e9 }, .{ .color = false, .explain = true });
+        var lines = std.mem.splitScalar(u8, w.buffered(), '\n');
+        while (lines.next()) |line| if (try std.unicode.utf8CountCodepoints(line) > 80) {
+            std.debug.print("too wide: {s}\n", .{line});
+            return error.TestUnexpectedResult;
+        };
+    }
 }
 
 test "history reads back the runs this command records" {
