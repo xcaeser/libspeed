@@ -1,12 +1,8 @@
 .{
     .name = .libspeed,
-
     .version = "1.2.0",
-
     .fingerprint = 0x7070c41121b3df19,
-
-    .minimum_zig_version = "0.17.0",
-
+    .minimum_zig_version = "0.17.1",
     .dependencies = .{
         .zli = .{
             .url = "https://github.com/xcaeser/zli/archive/v6.0.0.tar.gz",
@@ -14,7 +10,6 @@
             .lazy = true,
         },
     },
-
     .paths = .{
         "build.zig",
         "build.zig.zon",
