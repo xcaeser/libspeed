@@ -2,12 +2,11 @@
 
 Measure your internet connection: download, upload, latency, jitter, packet
 loss, how much latency grows while the link is busy, and whether your Wi-Fi or
-your ISP is to blame. One engine, four ways to use it:
+your ISP is to blame. One engine, three ways to use it:
 
 1. [CLI](#cli): the `speed` binary for macOS, Linux and Windows
 2. [C library](#c-library): `libspeed.a` and `speed.h`, for C, Go, Swift and anything with a C FFI
 3. [Zig package](#zig-package): the `speed` module
-4. [SDKs](#sdks): TypeScript for Bun
 
 ## CLI
 
@@ -39,8 +38,6 @@ row (`Router` on a wired connection) is the round trip to your router.
 ```sh
 curl -fsSL https://raw.githubusercontent.com/xcaeser/libspeed/main/install.sh | sh
 mise use -g github:xcaeser/libspeed
-bunx @xcaeser/speed run        # or: npx @xcaeser/speed run
-npm install -g @xcaeser/speed  # then: speed run
 ```
 
 Or download from [Releases](https://github.com/xcaeser/libspeed/releases):
@@ -141,21 +138,6 @@ const speed = @import("speed");
 const result = try speed.run(io, gpa, .{});
 std.debug.print("{d:.0} Mbps down\n", .{result.download.bps.p50 / 1e6});
 ```
-
-## SDKs
-
-### TypeScript (Bun)
-
-```ts
-import { run } from "@xcaeser/speed";
-
-const result = await run({ onProgress: (p) => console.log(p.phase, p.value) });
-console.log(result.download.bps.p50 / 1e6, "Mbps down");
-```
-
-The test runs in a worker, so it never blocks the event loop.
-
-Go and Swift link the [C library](#c-library) directly.
 
 ## How it measures
 
