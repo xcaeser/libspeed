@@ -108,6 +108,48 @@ const darwin = struct {
         if (c.ioctl(fd, @bitCast(SIOCGIFFUNCTIONALTYPE), &ifr) != 0) return false;
         return std.mem.readInt(u32, ifr[16..20], .native) == IFRTYPE_FUNCTIONAL_WIFI_INFRA;
     }
+
+    /// Writes one routing message with dst, gateway and netmask sockaddrs. A
+    /// null mask is the zero-length sockaddr macOS emits for the default route.
+    fn message(buf: []u8, index: u16, flags: i32, dst: [4]u8, gateway: [4]u8, mask: ?[4]u8) []u8 {
+        @memset(buf[0..rt_msghdr_len], 0);
+        var n: usize = rt_msghdr_len;
+        for ([_]?[4]u8{ dst, gateway, mask }) |address| {
+            const sa = buf[n..][0..16];
+            @memset(sa, 0);
+            if (address) |a| {
+                sa[0] = 16;
+                sa[1] = c.AF.INET;
+                sa[4..8].* = a;
+                n += 16;
+            } else {
+                n += 4;
+            }
+        }
+        std.mem.writeInt(u16, buf[0..2], @intCast(n), .native);
+        std.mem.writeInt(u16, buf[4..6], index, .native);
+        std.mem.writeInt(i32, buf[8..12], flags, .native);
+        std.mem.writeInt(i32, buf[12..16], 7, .native);
+        return buf[0..n];
+    }
+
+    test defaultRoute {
+        var table: [1024]u8 = undefined;
+        var len: usize = 0;
+        // Per-interface copy of the default route.
+        len += message(table[len..], 6, RTF_GATEWAY | RTF_IFSCOPE, .{ 0, 0, 0, 0 }, .{ 10, 0, 0, 1 }, null).len;
+        // A VPN's split default.
+        len += message(table[len..], 12, RTF_GATEWAY, .{ 0, 0, 0, 0 }, .{ 10, 8, 0, 1 }, .{ 128, 0, 0, 0 }).len;
+        const router = len;
+        len += message(table[len..], 6, RTF_GATEWAY, .{ 0, 0, 0, 0 }, .{ 192, 168, 1, 1 }, null).len;
+        len += message(table[len..], 6, 0, .{ 192, 168, 1, 0 }, .{ 192, 168, 1, 2 }, .{ 255, 255, 255, 0 }).len;
+
+        const route = defaultRoute(table[0..len]).?;
+        try std.testing.expectEqual([4]u8{ 192, 168, 1, 1 }, route.gateway);
+        try std.testing.expectEqual(6, route.index);
+        try std.testing.expectEqual(null, defaultRoute(table[0..router]));
+        try std.testing.expectEqual(null, defaultRoute(table[0..10]));
+    }
 };
 
 const linux = struct {
@@ -247,4 +289,5 @@ const windows = struct {
 test {
     _ = linux;
     _ = windows;
+    if (builtin.os.tag == .macos) _ = darwin;
 }

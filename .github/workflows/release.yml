@@ -12,9 +12,13 @@ permissions:
 concurrency: release
 
 jobs:
-  # Windows binaries are cross-compiled on Linux; this runs them for real.
-  windows:
-    runs-on: windows-latest
+  # Windows and macOS binaries are cross-compiled on Linux in the release job;
+  # this runs the tests and the CLI for real on each.
+  hosts:
+    strategy:
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
       - uses: jdx/mise-action@v3
@@ -24,7 +28,7 @@ jobs:
       - run: zig build run -- run --json
 
   release:
-    needs: windows
+    needs: hosts
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ github.token }}
