@@ -8,6 +8,7 @@ pub fn command(options: zli.InitOptions) !*zli.Command {
     const cmd = try zli.Command.init(options, .{
         .name = "run",
         .description = "Run a speed test against the nearest Cloudflare edge",
+        .shortcut = "r",
     }, exec);
     try cmd.addFlag(.{
         .name = "json",

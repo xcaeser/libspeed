@@ -36,7 +36,7 @@ pub fn main(init: std.process.Init) !void {
     });
     try root.addCommands(&.{
         try run.command(options),
-        try zli.Command.init(options, .{ .name = "version", .description = "Print the version" }, version),
+        try zli.Command.init(options, .{ .name = "version", .description = "Print the version", .shortcut = "v" }, version),
         try upgrade.command(options),
     });
 

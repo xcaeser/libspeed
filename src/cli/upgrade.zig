@@ -25,6 +25,7 @@ pub fn command(options: zli.InitOptions) !*zli.Command {
     return zli.Command.init(options, .{
         .name = "upgrade",
         .description = "Replace this binary with the latest GitHub release",
+        .shortcut = "up",
     }, exec);
 }
 
