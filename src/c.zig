@@ -86,7 +86,7 @@ export fn speed_run(options: ?*const Options, callback: ?ProgressFn, context: ?*
 
     var o: speed.Options = .{};
     if (options) |c| {
-        if (c.host) |h| o.host = std.mem.span(h);
+        if (c.host) |h| o.target = .{ .cloudflare = std.mem.span(h) };
         if (c.streams != 0) o.streams = c.streams;
         if (c.duration_ms != 0) o.duration = .fromMilliseconds(c.duration_ms);
         if (c.pings != 0) o.pings = c.pings;

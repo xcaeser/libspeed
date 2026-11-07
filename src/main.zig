@@ -3,6 +3,7 @@ const Io = std.Io;
 const zli = @import("zli");
 
 const run = @import("cli/run.zig");
+const to = @import("cli/to.zig");
 const upgrade = @import("cli/upgrade.zig");
 
 pub fn main(init: std.process.Init) !void {
@@ -36,6 +37,7 @@ pub fn main(init: std.process.Init) !void {
     });
     try root.addCommands(&.{
         try run.command(options),
+        try to.command(options),
         try zli.Command.init(options, .{ .name = "version", .description = "Print the version", .shortcut = "v" }, version),
         try upgrade.command(options),
     });
@@ -55,6 +57,7 @@ fn version(ctx: zli.CommandContext) !void {
 
 test {
     _ = run;
+    _ = to;
     _ = upgrade;
     _ = @import("cli/history.zig");
 }

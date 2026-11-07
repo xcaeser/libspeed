@@ -1,5 +1,5 @@
-//! Saturates the link with parallel HTTP streams and samples throughput and
-//! latency under load.
+//! Saturates the link with parallel HTTP or ssh streams and samples throughput
+//! and latency under load.
 const std = @import("std");
 const Io = std.Io;
 const http = std.http;
@@ -8,13 +8,14 @@ const Allocator = std.mem.Allocator;
 const Summary = @import("Summary.zig");
 const icmp = @import("icmp.zig");
 const probe = @import("probe.zig");
+const ssh = @import("ssh.zig");
 
 pub const Direction = enum { download, upload };
 
 pub const Result = struct {
     /// Bits per second over a sliding window, after the ramp-up is discarded.
     bps: Summary,
-    /// TCP connect time to the server while the link is saturated, in ms.
+    /// Round trip to the server while the link is saturated, in ms.
     latency: Summary,
     /// Echo round trip to the gateway while the link is saturated, in ms, or
     /// null without a gateway or when none of its echoes came back.
@@ -25,18 +26,23 @@ pub const Options = struct {
     streams: u8,
     duration: Io.Duration,
     max_bytes: u64,
-    down_url: []const u8,
-    up_url: []const u8,
-    target: Io.net.IpAddress,
+    server: Server,
+    latency: Latency,
     gateway: ?Io.net.IpAddress,
     /// Set to the server's Retry-After when it throttles this IP.
     retry_after: *?Io.Duration,
 };
 
+pub const Server = union(enum) {
+    /// Cloudflare's `/__down` and `/__up` endpoints.
+    https: struct { client: *http.Client, down: std.Uri, up: std.Uri },
+    ssh: []const u8,
+};
+
 const tick: Io.Duration = .fromMilliseconds(100);
 /// Throughput samples average over this many ticks.
 const window = 5;
-/// The first quarter of the run is TCP slow start and TLS handshakes.
+/// The first quarter of the run is TCP slow start and TLS or ssh handshakes.
 const ramp_divisor = 4;
 /// Steady-state ticks needed to report a phase that ends early.
 const min_steady = 10;
@@ -46,9 +52,8 @@ const ping_interval: Io.Duration = .fromMilliseconds(200);
 
 const Shared = struct {
     io: Io,
-    client: *http.Client,
+    server: Server,
     direction: Direction,
-    uri: std.Uri,
     bytes: std.atomic.Value(u64) = .init(0),
     stop: std.atomic.Value(bool) = .init(false),
     rate_limited: std.atomic.Value(bool) = .init(false),
@@ -67,10 +72,11 @@ const Worker = struct {
                     error.Canceled => return error.Canceled,
                     // Retrying only extends the server's penalty.
                     error.RateLimited => return s.rate_limited.store(true, .release),
-                    else => std.log.debug("{t} stream failed: {t}", .{ s.direction, err }),
+                    else => {},
                 }
                 // Cancellation surfaces as ReadFailed or WriteFailed, consuming it.
                 if (s.stop.load(.acquire)) return;
+                std.log.debug("{t} stream failed: {t}", .{ s.direction, err });
                 try io.sleep(.fromMilliseconds(250), .awake);
                 continue;
             };
@@ -81,12 +87,46 @@ const Worker = struct {
         }
     }
 
+    /// One ssh child for the whole phase. A stream that fails stays down:
+    /// each retry would be another login.
+    fn stream(s: *Shared) Io.Cancelable!void {
+        pipe(s) catch |err| switch (err) {
+            error.Canceled => |e| return e,
+            else => if (!s.stop.load(.acquire)) std.log.debug("{t} stream failed: {t}", .{ s.direction, err }),
+        };
+    }
+
+    fn pipe(s: *Shared) !void {
+        const io = s.io;
+        var child = try ssh.spawn(io, s.server.ssh, s.direction);
+        defer child.kill(io);
+        switch (s.direction) {
+            .download => {
+                var buf: [64 << 10]u8 = undefined;
+                var reader = child.stdout.?.readerStreaming(io, &buf);
+                while (!s.stop.load(.acquire)) {
+                    const n = try reader.interface.discard(.limited(buf.len));
+                    _ = s.bytes.fetchAdd(n, .monotonic);
+                }
+            },
+            .upload => {
+                const zeros: [64 << 10]u8 = @splat(0);
+                var writer = child.stdin.?.writerStreaming(io, &.{});
+                while (!s.stop.load(.acquire)) {
+                    try writer.interface.writeAll(&zeros);
+                    _ = s.bytes.fetchAdd(zeros.len, .monotonic);
+                }
+            },
+        }
+    }
+
     fn transfer(s: *Shared, size: u64) !void {
-        var uri = s.uri;
+        const server = s.server.https;
+        var uri = if (s.direction == .download) server.down else server.up;
         var query_buf: [32]u8 = undefined;
         if (s.direction == .download) uri.query = .{ .raw = try std.fmt.bufPrint(&query_buf, "bytes={d}", .{size}) };
 
-        var req = try s.client.request(if (s.direction == .download) .GET else .POST, uri, .{
+        var req = try server.client.request(if (s.direction == .download) .GET else .POST, uri, .{
             .redirect_behavior = .unhandled,
             .headers = .{ .accept_encoding = .omit },
         });
@@ -158,11 +198,18 @@ fn Pinger(comptime Probe: type) type {
     };
 }
 
-const Connect = struct {
-    target: Io.net.IpAddress,
+/// Round trips to the server, without its processing in the way.
+pub const Latency = union(enum) {
+    /// TCP handshakes.
+    connect: Io.net.IpAddress,
+    /// Echoes through a logged-in ssh session.
+    ssh: *ssh.Echo,
 
-    fn ms(c: *Connect, io: Io) !f64 {
-        return probe.connectMs(io, c.target);
+    pub fn ms(l: Latency, io: Io) !f64 {
+        return switch (l) {
+            .connect => |address| probe.connectMs(io, address),
+            .ssh => |echo| echo.ms(io),
+        };
     }
 };
 
@@ -170,18 +217,12 @@ const Connect = struct {
 pub fn measure(
     io: Io,
     gpa: Allocator,
-    client: *http.Client,
     direction: Direction,
     options: Options,
     context: anytype,
     comptime onTick: fn (@TypeOf(context), f64, f32) void,
 ) !Result {
-    var shared: Shared = .{
-        .io = io,
-        .client = client,
-        .direction = direction,
-        .uri = try .parse(if (direction == .download) options.down_url else options.up_url),
-    };
+    var shared: Shared = .{ .io = io, .server = options.server, .direction = direction };
 
     const duration_ns: u64 = @intCast(options.duration.toNanoseconds());
     const tick_ns: u64 = @intCast(tick.toNanoseconds());
@@ -190,7 +231,7 @@ pub fn measure(
     const max_pings = duration_ns / @as(u64, @intCast(ping_interval.toNanoseconds())) + 1;
     const pings = try gpa.alloc(f64, max_pings);
     defer gpa.free(pings);
-    var pinger: Pinger(Connect) = .{ .shared = &shared, .probe = .{ .target = options.target }, .samples = pings };
+    var pinger: Pinger(Latency) = .{ .shared = &shared, .probe = options.latency, .samples = pings };
 
     // Echoes to the gateway cross the local network's queues but not the ISP's.
     const gateway_pings = try gpa.alloc(f64, max_pings);
@@ -201,8 +242,11 @@ pub fn measure(
 
     var group: Io.Group = .init;
     defer group.cancel(io);
-    for (0..options.streams) |_| try group.concurrent(io, Worker.run, .{&shared});
-    try group.concurrent(io, Pinger(Connect).run, .{&pinger});
+    for (0..options.streams) |_| switch (options.server) {
+        .https => try group.concurrent(io, Worker.run, .{&shared}),
+        .ssh => try group.concurrent(io, Worker.stream, .{&shared}),
+    };
+    try group.concurrent(io, Pinger(Latency).run, .{&pinger});
     if (gateway_pinger) |*p| try group.concurrent(io, Pinger(icmp.Echo).run, .{p});
 
     const start = Io.Clock.awake.now(io);

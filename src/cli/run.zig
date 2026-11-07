@@ -76,16 +76,16 @@ fn remember(ctx: zli.CommandContext, r: *const speed.Result) ?history.Rates {
     };
 }
 
-const clear_line = "\r\x1b[2K";
+pub const clear_line = "\r\x1b[2K";
 const bold = "\x1b[1m";
 const dim = "\x1b[2m";
 const reset = "\x1b[0m";
 
 /// Redraws one line per tick: the phase, its current value and a progress bar.
-const Live = struct {
+pub const Live = struct {
     w: *Io.Writer,
 
-    fn onEvent(context: ?*anyopaque, event: speed.Event) void {
+    pub fn onEvent(context: ?*anyopaque, event: speed.Event) void {
         const live: *Live = @ptrCast(@alignCast(context.?));
         live.draw(event) catch {};
     }
@@ -112,9 +112,9 @@ const Live = struct {
     }
 };
 
-const Style = struct { color: bool, explain: bool };
+pub const Style = struct { color: bool, explain: bool };
 
-fn report(w: *Io.Writer, r: speed.Result, usual: ?history.Rates, style: Style) !void {
+pub fn report(w: *Io.Writer, r: speed.Result, usual: ?history.Rates, style: Style) !void {
     const b = if (style.color) bold else "";
     const d = if (style.color) dim else "";
     const x = if (style.color) reset else "";

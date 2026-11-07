@@ -61,8 +61,14 @@ downloaded binary, run `xattr -d com.apple.quarantine speed` once.
 | Command | |
 | --- | --- |
 | `speed run`, `r` | Run a test. `--explain` says what each figure means; `--json` prints p10/p50/p90 for every figure. |
+| `speed to <destination>` | Test the link to a host you can ssh into: a `~/.ssh/config` alias, `user@host` or `ssh://user@host:port`, over IPv4 or IPv6. Nothing is installed on the host. |
 | `speed upgrade`, `up` | Replace the binary with the latest release, verified by SHA-256. |
 | `speed version`, `v` | Print the version. |
+
+`speed to` runs six `ssh` streams each way (`cat /dev/zero` down,
+`cat >/dev/null` up) and times one-byte echoes through a logged-in session, so
+the rates are what six ssh connections carry, encryption included; a single
+`scp` gets less. It logs in with your keys and config, without prompting.
 
 ### JSON
 
