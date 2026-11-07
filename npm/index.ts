@@ -33,9 +33,19 @@ export interface Verdict {
   addedMs: number;
 }
 
+/** The network this device reaches the internet through. */
+export interface Isp {
+  /** e.g. "Orange S.A." */
+  name: string;
+  /** Autonomous system number. */
+  asn: number;
+}
+
 export interface Result {
   /** Edge location code, e.g. "CDG". */
   server: string | null;
+  /** Null when unknown. */
+  isp: Isp | null;
   dnsMs: number;
   latencyMs: Summary;
   jitterMs: number;

@@ -32,6 +32,7 @@ const Verdict = extern struct {
 
 const Result = extern struct {
     colo: [4]u8,
+    asn: u32,
     dns_ms: f64,
     latency_ms: Summary,
     jitter_ms: f64,
@@ -40,14 +41,17 @@ const Result = extern struct {
     upload: Load,
     gateway: Gateway,
     verdict: Verdict,
+    isp: [64]u8,
 };
 
 comptime {
     // npm/worker.ts decodes these by offset.
     std.debug.assert(@sizeOf(Options) == 24);
-    std.debug.assert(@sizeOf(Result) == 248);
+    std.debug.assert(@sizeOf(Result) == 312);
+    std.debug.assert(@offsetOf(Result, "asn") == 4);
     std.debug.assert(@offsetOf(Result, "gateway") == 200);
     std.debug.assert(@offsetOf(Result, "verdict") == 232);
+    std.debug.assert(@offsetOf(Result, "isp") == 248);
 }
 
 const Status = enum(c_int) { ok, rate_limited, dns, network, out_of_memory, invalid_options };
@@ -102,6 +106,7 @@ export fn speed_run(options: ?*const Options, callback: ?ProgressFn, context: ?*
     };
     out.* = .{
         .colo = if (r.colo) |c| c ++ .{0} else @splat(0),
+        .asn = if (r.isp) |i| i.asn else 0,
         .dns_ms = r.dns,
         .latency_ms = summary(r.latency),
         .jitter_ms = r.jitter,
@@ -117,6 +122,11 @@ export fn speed_run(options: ?*const Options, callback: ?ProgressFn, context: ?*
             .phase = @backingInt(v.phase),
             .added_ms = v.added,
         } else .{ .segment = .none, .phase = 0, .added_ms = 0 },
+        .isp = blk: {
+            var buf: [64]u8 = @splat(0);
+            if (r.isp) |i| @memcpy(buf[0..i.len], i.name());
+            break :blk buf;
+        },
     };
     return .ok;
 }

@@ -41,7 +41,7 @@ pub fn main(init: std.process.Init) !void {
     });
 
     var args = try init.minimal.args.iterateAllocator(init.arena.allocator());
-    root.runAndExit(&args, .{});
+    root.runAndExit(&args, .{ .data = init.environ_map });
 }
 
 fn help(ctx: zli.CommandContext) !void {
@@ -56,4 +56,5 @@ fn version(ctx: zli.CommandContext) !void {
 test {
     _ = run;
     _ = upgrade;
+    _ = @import("cli/history.zig");
 }

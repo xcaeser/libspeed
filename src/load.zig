@@ -266,7 +266,7 @@ fn settled(counts: []const u64) bool {
     return prior > 0 and diff * 100 <= prior * 5;
 }
 
-pub fn retryAfter(head: http.Client.Response.Head) ?u32 {
+fn retryAfter(head: http.Client.Response.Head) ?u32 {
     var it = head.iterateHeaders();
     while (it.next()) |h| {
         if (std.ascii.eqlIgnoreCase(h.name, "retry-after")) return std.fmt.parseInt(u32, h.value, 10) catch null;

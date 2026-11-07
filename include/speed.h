@@ -62,6 +62,7 @@ typedef struct {
 
 typedef struct {
     char colo[4]; /* edge location code, e.g. "CDG"; empty if unknown */
+    uint32_t asn; /* 0 if unknown */
     double dns_ms;
     speed_summary latency_ms;
     double jitter_ms;
@@ -70,6 +71,7 @@ typedef struct {
     speed_load upload;
     speed_gateway gateway;
     speed_verdict verdict;
+    char isp[64]; /* network operator, e.g. "Orange S.A."; empty if unknown */
 } speed_result;
 
 /* `value` is ms during SPEED_PHASE_LATENCY, bits per second otherwise.

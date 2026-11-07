@@ -8,15 +8,18 @@ const Allocator = std.mem.Allocator;
 const gateway = @import("gateway.zig");
 const icmp = @import("icmp.zig");
 const load = @import("load.zig");
+const meta = @import("meta.zig");
 const probe = @import("probe.zig");
 
 pub const Summary = @import("Summary.zig");
 pub const Verdict = @import("Verdict.zig");
 pub const Load = load.Result;
+pub const Isp = meta.Isp;
 pub const min_duration = load.min_duration;
 
 pub const Options = struct {
-    /// Must serve Cloudflare's `/__down?bytes=N` and `/__up` endpoints.
+    /// Must serve Cloudflare's `/__down?bytes=N` and `/__up` endpoints, and may
+    /// serve `/meta` to name the edge and network.
     host: []const u8 = "speed.cloudflare.com",
     /// Parallel connections per direction.
     streams: u8 = 6,
@@ -61,6 +64,8 @@ pub const Listener = struct {
 pub const Result = struct {
     /// IATA code of the edge that served the test, e.g. "CDG".
     colo: ?[3]u8,
+    /// The network this device reaches the internet through; null when unknown.
+    isp: ?Isp,
     /// Time to resolve the host, in ms.
     dns: f64,
     /// Idle round trip, in ms.
@@ -99,7 +104,7 @@ pub fn run(io: Io, gpa: Allocator, options: Options) !Result {
 
     var client: std.http.Client = .{ .allocator = gpa, .io = io };
     defer client.deinit();
-    const colo = try edge(&client, down_url, diagnostics);
+    const identity = try meta.fetch(&client, gpa, options.host);
 
     var loss_future = try io.concurrent(icmp.loss, .{ io, resolved.address, .{} });
     defer if (loss_future.cancel(io)) |_| {} else |_| {};
@@ -150,7 +155,8 @@ pub fn run(io: Io, gpa: Allocator, options: Options) !Result {
     const download = try measure(io, gpa, &client, .download, load_options, options.listener);
     const upload = try measure(io, gpa, &client, .upload, load_options, options.listener);
     return .{
-        .colo = colo,
+        .colo = identity.colo,
+        .isp = identity.isp,
         .dns = resolved.ms,
         .latency = latency,
         .jitter = jitter,
@@ -197,33 +203,11 @@ fn measure(io: Io, gpa: Allocator, client: *std.http.Client, direction: load.Dir
     return load.measure(io, gpa, client, direction, options, Tick{ .listener = listener, .phase = phase }, Tick.onTick);
 }
 
-/// Returns the edge's location code.
-fn edge(client: *std.http.Client, down_url: []const u8, diagnostics: *Diagnostics) !?[3]u8 {
-    var uri: std.Uri = try .parse(down_url);
-    uri.query = .{ .raw = "bytes=0" };
-    var req = try client.request(.GET, uri, .{ .redirect_behavior = .unhandled });
-    defer req.deinit();
-    try req.sendBodiless();
-    const response = try req.receiveHead(&.{});
-    switch (response.head.status) {
-        .ok => {},
-        .forbidden, .too_many_requests => {
-            if (load.retryAfter(response.head)) |seconds| diagnostics.retry_after = .fromSeconds(seconds);
-            return error.RateLimited;
-        },
-        else => return error.HttpStatus,
-    }
-    var it = response.head.iterateHeaders();
-    while (it.next()) |h| {
-        if (std.ascii.eqlIgnoreCase(h.name, "colo") and h.value.len == 3) return h.value[0..3].*;
-    }
-    return null;
-}
-
 test {
     _ = gateway;
     _ = icmp;
     _ = Verdict;
     _ = load;
+    _ = meta;
     _ = Summary;
 }

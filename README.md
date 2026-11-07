@@ -23,8 +23,13 @@ $ speed run
   Your Wi-Fi adds 48 ms while uploading, enough for calls and games to feel it.
   Ethernet avoids it.
 
-  Cloudflare CDG
+  Orange S.A. · Cloudflare CDG
 ```
+
+A rate 20% or more off the usual shows "usually …" next to it, compared with
+your last 20 runs on the same network, kept in `history.jsonl` (macOS
+`~/Library/Application Support/speed/`, Linux `$XDG_STATE_HOME/speed/` or
+`~/.local/state/speed/`, Windows `%LOCALAPPDATA%\speed\`).
 
 The verdict appears only when something adds a noticeable delay. The `Wi-Fi`
 row (`Router` on a wired connection) is the round trip to your router.
@@ -64,7 +69,8 @@ downloaded binary, run `xattr -d com.apple.quarantine speed` once.
 `speed run --json` prints only the result, for scripts and dashboards. Rates
 are in bits per second, latencies in milliseconds, and loss is a fraction
 (`null` when ICMP is denied). `gateway` is `null` when the router is unknown or
-ignores ICMP; `verdict` is `null` when nothing noticeable slows the connection.
+ignores ICMP; `isp` is `null` when unknown; `verdict` is `null` when nothing
+noticeable slows the connection.
 
 ```sh
 speed run --json | jq '.download.bps.p50 / 1e6'
@@ -73,6 +79,7 @@ speed run --json | jq '.download.bps.p50 / 1e6'
 ```json
 {
   "server": "CDG",
+  "isp": { "name": "Orange S.A.", "asn": 3215 },
   "dns_ms": 4.14,
   "latency_ms": { "p10": 6.68, "p50": 7.88, "p90": 12.84 },
   "jitter_ms": 14.88,

@@ -28,7 +28,7 @@ self.onmessage = ({ data }: MessageEvent<Omit<Options, "onProgress">>) => {
       postMessage({ progress: { phase: phases[phase], value, progress } }),
     { args: [FFIType.ptr, FFIType.i32, FFIType.f64, FFIType.f32], returns: FFIType.void },
   );
-  const out = new Uint8Array(248);
+  const out = new Uint8Array(312);
   const status = lib.symbols.speed_run(options, progress.ptr, null, out);
   progress.close();
 
@@ -44,9 +44,12 @@ function decode(bytes: Uint8Array): Result {
   const known = (offset: number) => (Number.isNaN(f(offset + 8)) ? null : summary(offset));
   const load = (offset: number): Load => ({ bps: summary(offset), latencyMs: summary(offset + 24), gatewayLatencyMs: known(offset + 48) });
   const gateway = known(200);
+  const asn = view.getUint32(4, true);
+  const name = bytes.subarray(248, 312);
   const segment = segments[view.getInt32(232, true)];
   return {
     server: colo.startsWith("\0") ? null : colo,
+    isp: asn ? { name: new TextDecoder().decode(name.subarray(0, name.indexOf(0))), asn } : null,
     dnsMs: f(8),
     latencyMs: summary(16),
     jitterMs: f(40),
